@@ -1,0 +1,61 @@
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg0: #080b10; --bg1: #0d1117; --bg2: #131920; --bg3: #1a2230; --bg4: #202c3d;
+  --border: rgba(0,200,255,0.10); --border-bright: rgba(0,200,255,0.25);
+  --cyan: #00c8ff; --cyan-dim: rgba(0,200,255,0.15);
+  --green: #00ff94; --green-dim: rgba(0,255,148,0.12);
+  --yellow: #ffcc00; --yellow-dim: rgba(255,204,0,0.12);
+  --red: #ff4466; --red-dim: rgba(255,68,102,0.12);
+  --orange: #ff8c42; --orange-dim: rgba(255,140,66,0.12);
+  --text: #d0e0f0; --text2: #7090a8; --text3: #3a5068;
+  --font: 'Barlow', sans-serif; --mono: 'Share Tech Mono', monospace;
+  --sidebar-w: 240px; --topbar-h: 56px; --radius: 10px; --radius-sm: 6px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 15px; }
+body { font-family: var(--font); background: var(--bg0); color: var(--text); }
+
+.scan-lines {
+  pointer-events: none; position: fixed; inset: 0; z-index: 9999;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.06) 2px, rgba(0,0,0,0.06) 4px);
+}
+
+.mono-text { font-family: var(--mono); font-size: 11px; color: var(--text3); letter-spacing: 0.05em; }
+.hidden { display: none !important; }
+
+/* Status dot */
+.status-dot { width: 8px; height: 8px; border-radius: 50%; }
+.status-dot.online  { background: var(--green);  box-shadow: 0 0 6px var(--green);  animation: blink 2.4s ease-in-out infinite; }
+.status-dot.warning { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); animation: blink 1.2s ease-in-out infinite; }
+.status-dot.offline { background: var(--text3); }
+
+@keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.35; } }
+
+/* Gauge */
+.gauge-wrap { width: 100%; }
+.gauge-label { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 12px; color: var(--text2); }
+.gauge-val { font-family: var(--mono); font-size: 13px; color: var(--text); }
+.gauge-bar { height: 6px; background: var(--bg4); border-radius: 3px; overflow: hidden; }
+.gauge-fill { height: 100%; border-radius: 3px; transition: width 0.6s ease; }
+.gauge-fill.green  { background: var(--green);  box-shadow: 0 0 8px var(--green); }
+.gauge-fill.yellow { background: var(--yellow); box-shadow: 0 0 8px var(--yellow); }
+.gauge-fill.red    { background: var(--red);    box-shadow: 0 0 8px var(--red); }
+.gauge-fill.cyan   { background: var(--cyan);   box-shadow: 0 0 8px var(--cyan); }
+
+/* Metric card */
+.m-card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; transition: border-color 0.2s; }
+.m-card:hover { border-color: var(--border-bright); }
+.m-card-label { font-family: var(--mono); font-size: 10px; color: var(--text3); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 8px; }
+.m-card-val   { font-family: var(--mono); font-size: 28px; color: var(--cyan); line-height: 1; margin-bottom: 4px; }
+.m-card-unit  { font-size: 13px; color: var(--text2); margin-left: 2px; }
+.m-card-sub   { font-size: 12px; color: var(--text3); margin-top: 6px; }
+
+::-webkit-scrollbar       { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 3px; }
+
+@media (max-width: 1280px) { :root { --sidebar-w: 210px; } }
+@media (max-width: 1024px) { :root { --sidebar-w: 200px; --radius: 8px; } html { font-size: 14px; } }
+@media (max-width: 640px)  { html { font-size: 13px; } .m-card { padding: 14px 16px; } .m-card-val { font-size: 22px; } }
