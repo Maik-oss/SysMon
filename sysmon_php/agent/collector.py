@@ -135,11 +135,39 @@ def resolver_identidade(cfg: configparser.ConfigParser) -> tuple[str, str, str]:
     codigo_cfg = cfg.get("computador", "codigo", fallback="auto").strip()
     label_cfg = cfg.get("computador", "label", fallback="auto").strip()
     location = cfg.get("computador", "location", fallback="")
+    patrimonio = re.sub(r"\D", "", cfg.get("computador", "patrimonio", fallback=""))
 
     auto_codigo, auto_label = auto_identidade()
-    codigo = auto_codigo if codigo_cfg.lower() in ("", "auto") else codigo_cfg
+    if codigo_cfg.lower() in ("", "auto"):
+        # Com o patrimônio informado, o código é CM + patrimônio (ex.: CM406652),
+        # o mesmo que o painel usa na lista importada da planilha do campus.
+        codigo = f"CM{patrimonio}" if patrimonio else auto_codigo
+    else:
+        codigo = codigo_cfg
     label = auto_label if label_cfg.lower() in ("", "auto") else label_cfg
     return codigo, label, location
+
+
+def configurar_patrimonio(caminho: str) -> None:
+    """Pergunta o número de patrimônio e grava no config.ini (chamado pelo
+    install.bat). Mantém os comentários do arquivo."""
+    print()
+    print("=== Numero de patrimonio deste computador (6 digitos, ex.: 406652) ===")
+    while True:
+        pat = input("Patrimonio (ENTER para pular): ").strip()
+        if pat == "" or re.fullmatch(r"\d{6}", pat):
+            break
+        print("Use exatamente 6 numeros.")
+    if not pat:
+        print("Pulado: o computador sera identificado pelo nome do Windows.")
+        return
+    texto = Path(caminho).read_text(encoding="utf-8")
+    if re.search(r"^patrimonio\s*=.*$", texto, re.MULTILINE):
+        texto = re.sub(r"^patrimonio\s*=.*$", f"patrimonio = {pat}", texto, count=1, flags=re.MULTILINE)
+    else:
+        texto = re.sub(r"(\[computador\][^\n]*\n)", lambda m: m.group(1) + f"patrimonio = {pat}\n", texto, count=1)
+    Path(caminho).write_text(texto, encoding="utf-8")
+    print(f"Salvo: este computador sera CM{pat} no painel.")
 
 
 def _extrair_numero(valor):
@@ -618,13 +646,22 @@ def conectar_mysql(cfg: configparser.ConfigParser):
 
 
 def garantir_computador(conn, codigo: str, label: str, location: str, mobo: dict) -> None:
+    """Cadastra o PC (se novo) ou atualiza. Se o PC veio da planilha do
+    campus (tem patrimônio), mantém o nome/sala já cadastrados no painel."""
     cursor = conn.cursor()
     cursor.execute(
-        """
+        "SELECT COUNT(*) FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'computadores' AND COLUMN_NAME = 'patrimonio'"
+    )
+    tem_planilha = cursor.fetchone()[0] > 0   # coluna criada pelo painel/importação
+    manter_label = "IF(patrimonio IS NOT NULL, label, VALUES(label))" if tem_planilha else "VALUES(label)"
+    cursor.execute(
+        f"""
         INSERT INTO computadores (codigo, label, location, mobo_manufacturer, mobo_model, bios_version)
         VALUES (%s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
-            label = VALUES(label), location = VALUES(location),
+            label = {manter_label},
+            location = IF(VALUES(location) = '', location, VALUES(location)),
             mobo_manufacturer = VALUES(mobo_manufacturer),
             mobo_model = VALUES(mobo_model),
             bios_version = VALUES(bios_version)
@@ -691,7 +728,16 @@ def main():
         default=str(Path(__file__).with_name("config.ini")),
         help="Caminho do arquivo config.ini",
     )
+    parser.add_argument(
+        "--configurar",
+        action="store_true",
+        help="Pergunta o número de patrimônio e grava no config.ini",
+    )
     args = parser.parse_args()
+
+    if args.configurar:
+        configurar_patrimonio(args.config)
+        return
 
     cfg = carregar_config(args.config)
     codigo, label, location = resolver_identidade(cfg)

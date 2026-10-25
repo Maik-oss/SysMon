@@ -28,6 +28,8 @@ const views = {
   monitor:     $("viewMonitorAll"),
   alerts:      $("viewAlerts"),
   notifications: $("viewNotifications"),
+  history:     $("viewHistory"),
+  plantas:     $("viewPlantas"),
   settings:    $("viewSettings"),
   users:       $("viewUsers"),        // só existe no DOM se o logado for um dos admins (ver ADMIN_USERNAMES no PHP)
   placeholder: $("viewPlaceholder"),
@@ -38,6 +40,8 @@ const navBtns = {
   monitor:  $("btnMonitorAll"),
   alerts:   $("btnAlerts"),
   notifications: $("btnNotifications"),
+  history:  $("btnHistory"),
+  plantas:  $("btnPlantas"),
   settings: $("btnSettings"),
   users:    $("btnUsers"),            // idem: pode ser null para não-admin
 };
@@ -72,6 +76,9 @@ const API = {
   maintenanceSave: "api/maintenance.php",
   emailSettings:  "api/email_settings.php",
   userEmail:      "api/user_email.php",
+  history:        periodo => `api/history.php?periodo=${periodo}`,
+  fleetSummary:   "api/fleet_summary.php",
+  plantas:        "api/plantas.php",
 };
 
 // Mesmo limite usado no back-end (includes/data.php: ALERT_THRESHOLD) —
@@ -160,8 +167,8 @@ if (navBtns.users) {
 }
 
 // Search
-computerSearch.addEventListener("input", () => loadComputers(computerSearch.value.toUpperCase().trim()));
-computerSearch.addEventListener("keydown", e => { if (e.key === "Escape") { computerSearch.value = ""; loadComputers(); } });
+computerSearch.addEventListener("input", renderComputerList);
+computerSearch.addEventListener("keydown", e => { if (e.key === "Escape") { computerSearch.value = ""; renderComputerList(); } });
 
 // Load computers
 async function loadComputers(query = "") {
@@ -173,6 +180,100 @@ async function loadComputers(query = "") {
     list.forEach((comp, i) => computerGrid.appendChild(makeComputerCard(comp, i)));
   } catch (e) { console.error(e); }
 }
+
+// "Sem agente": cadastrado pela planilha, mas o agente ainda não rodou nele.
+function statusInfo(comp) {
+  if (comp.sem_agente) return { cls: "pendente", label: "Sem agente" };
+  const nomes = { online: "Online", warning: "Alerta", offline: "Offline" };
+  return { cls: comp.status, label: nomes[comp.status] };
+}
+
+function situacaoTag(comp) {
+  if (!comp.situacao || comp.situacao === "OK") return "";
+  const cls = comp.situacao === "PARA DAR BAIXA" ? "baixa" : "atencao";
+  return `<span class="situacao-tag ${cls}" title="Situação na planilha do patrimônio">${esc(comp.situacao)}</span>`;
+}
+
+function makeComputerCard(comp, i) {
+  const st = statusInfo(comp);
+  const card = document.createElement("div");
+  card.className = `computer-card ${comp.sem_agente ? "off" : comp.status === "warning" ? "warn" : comp.status === "offline" ? "off" : ""}`;
+  card.style.animationDelay = `${Math.min(i, 20) * 0.03}s`;
+  const salaTxt = comp.sala || comp.location || "Sala não informada";
+  card.innerHTML = `
+    <div class="card-top">
+      <span class="computer-code">${esc(comp.code)}</span>
+      <span class="status-badge ${st.cls}"><span class="status-dot ${st.cls}"></span>${st.label}</span>
+    </div>
+    <div class="computer-label">${esc(salaTxt)}</div>
+    ${comp.modelo ? `<div class="computer-modelo">${esc(comp.modelo)}</div>` : ""}
+    <div class="computer-loc">
+      <svg width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="14" height="10" rx="1.5"/><path d="M7 17h6M10 13v4"/></svg>
+      ${comp.patrimonio ? "Patrimônio " + esc(comp.patrimonio) : esc(comp.label)}
+      ${situacaoTag(comp)}
+    </div>`;
+  // Sempre clicável — mesmo offline, precisa poder abrir pra ver
+  // detalhes e remover o computador do painel se for o caso.
+  card.addEventListener("click", () => openComputer(comp));
+  return card;
+}
+
+// Lista completa vem do servidor uma vez; busca e filtros rodam no navegador.
+let allComputers = [];
+
+function buildListFilters() {
+  const fill = (sel, campo, vazio) => {
+    const atual = sel.value;
+    const cont = new Map();
+    allComputers.forEach(c => { const v = c[campo] || ""; cont.set(v, (cont.get(v) || 0) + 1); });
+    const itens = [...cont.entries()].filter(([v]) => v).sort((x, y) => x[0].localeCompare(y[0], "pt-BR", { numeric: true }));
+    const semInfo = cont.get("") || 0;
+    sel.innerHTML = `<option value="">${vazio}</option>` +
+      itens.map(([v, n]) => `<option value="${esc(v)}">${esc(v)} (${n})</option>`).join("") +
+      (semInfo ? `<option value="__sem__">Sem informação (${semInfo})</option>` : "");
+    sel.value = [...sel.options].some(o => o.value === atual) ? atual : "";
+  };
+  fill($("filterSala"), "sala", "Todas as salas");
+  fill($("filterModelo"), "modelo", "Todos os modelos");
+}
+
+function matchesListFilters(comp) {
+  const q = computerSearch.value.toUpperCase().trim();
+  if (q) {
+    const texto = [comp.code, comp.label, comp.patrimonio, comp.sala, comp.modelo].join(" ").toUpperCase();
+    if (!texto.includes(q)) return false;
+  }
+  const sala = $("filterSala").value, modelo = $("filterModelo").value, ag = $("filterAgente").value;
+  if (sala && (sala === "__sem__" ? comp.sala : comp.sala !== sala)) return false;
+  if (modelo && (modelo === "__sem__" ? comp.modelo : comp.modelo !== modelo)) return false;
+  if (ag === "com" && comp.sem_agente) return false;
+  if (ag === "sem" && !comp.sem_agente) return false;
+  return true;
+}
+
+function renderComputerList() {
+  computerGrid.innerHTML = "";
+  emptyState.classList.add("hidden");
+  const list = allComputers.filter(matchesListFilters);
+  $("listCount").textContent = `${list.length} de ${allComputers.length} computadores`;
+  if (!list.length) { emptyState.classList.remove("hidden"); return; }
+  list.forEach((comp, i) => computerGrid.appendChild(makeComputerCard(comp, i)));
+}
+
+async function loadComputers() {
+  try {
+    allComputers = await fetch(API.search("")).then(r => r.json());
+    buildListFilters();
+    renderComputerList();
+  } catch (e) { console.error(e); }
+}
+
+["filterSala", "filterModelo", "filterAgente"].forEach(id => $(id).addEventListener("change", renderComputerList));
+$("filterClear").addEventListener("click", () => {
+  computerSearch.value = "";
+  ["filterSala", "filterModelo", "filterAgente"].forEach(id => { $(id).value = ""; });
+  renderComputerList();
+});
 
 function makeComputerCard(comp, i) {
   const statusLabel = { online:"Online", warning:"Alerta", offline:"Offline" };
@@ -201,11 +302,16 @@ async function openComputer(comp) {
   currentCat = "overview";
   clearRefresh();
 
-  const statusLabel = { online:"Online", warning:"Alerta", offline:"Offline" };
-  computerTitle.textContent    = `${comp.code} — ${comp.label}`;
-  computerSubtitle.textContent = comp.location;
-  computerStatus.className     = `status-badge ${comp.status}`;
-  computerStatus.innerHTML     = `<span class="status-dot ${comp.status}"></span>${statusLabel[comp.status]}`;
+  const st = statusInfo(comp);
+  computerTitle.textContent    = `${comp.code} — ${comp.sala || comp.label}`;
+  computerSubtitle.textContent = comp.location || "";
+  computerStatus.className     = `status-badge ${st.cls}`;
+  computerStatus.innerHTML     = `<span class="status-dot ${st.cls}"></span>${st.label}`;
+  $("cadastroInfo").innerHTML = [
+    ["Patrimônio", comp.patrimonio], ["Sala / local", comp.sala || comp.location],
+    ["Modelo", comp.modelo], ["Situação na planilha", comp.situacao],
+  ].filter(([, v]) => v).map(([k, v]) =>
+    `<div class="cadastro-item"><div class="cadastro-k">${k}</div><div class="cadastro-v">${esc(v)}</div></div>`).join("");
 
   document.querySelectorAll(".cat-btn").forEach(b => b.classList.remove("active"));
   document.querySelector(".cat-btn[data-cat='overview']").classList.add("active");
@@ -215,6 +321,9 @@ async function openComputer(comp) {
   if (comp.status === "offline") {
     metricArea.innerHTML = "";
     tempSubmenu.classList.add("hidden");
+    offlineState.querySelector("div").textContent = comp.sem_agente
+      ? "Sem agente — instale o agente neste computador para começar o monitoramento"
+      : "Computador Offline";
     offlineState.classList.remove("hidden");
     return;
   }
@@ -233,8 +342,13 @@ function refreshDetail() {
 
 btnBack.addEventListener("click", () => {
   clearRefresh();
+  if (voltarParaPlantas) {            // abriu o computador a partir de uma planta
+    voltarParaPlantas = false;
+    abrirPlantas();
+    return;
+  }
   showView(views.list, "Listar Computadores");
-  loadComputers(computerSearch.value.toUpperCase().trim());
+  loadComputers();
 });
 
 const btnDeleteComputer = $("btnDeleteComputer");
@@ -259,7 +373,7 @@ if (btnDeleteComputer) {
       if (data.ok) {
         clearRefresh();
         showView(views.list, "Listar Computadores");
-        loadComputers(computerSearch.value.toUpperCase().trim());
+        loadComputers();
       } else {
         alert(data.error || "Não foi possível remover esse computador.");
         btnDeleteComputer.disabled = false;
@@ -353,11 +467,13 @@ function gauge(label, val, unit, pct, color) {
   </div></div>`;
 }
 
-function metricCard(label, val, unit, sub = "") {
+function metricCard(label, val, unit, sub = "", texto = false) {
   const has = val !== null && val !== undefined && !Number.isNaN(val);
-  return `<div class="m-card">
+  // texto=true: valor é um texto longo (modelo da placa, versão da BIOS),
+  // não um número — usa fonte menor e quebra a linha em vez de vazar do card.
+  return `<div class="m-card ${texto ? "m-card-textual" : ""}">
     <div class="m-card-label">${label}</div>
-    <div class="m-card-val">${fmt(val)}<span class="m-card-unit">${has ? unit : ""}</span></div>
+    <div class="m-card-val ${texto ? "texto" : ""}">${texto ? esc(val) : fmt(val)}<span class="m-card-unit">${has ? unit : ""}</span></div>
     ${sub ? `<div class="m-card-sub">${sub}</div>` : ""}
   </div>`;
 }
@@ -378,8 +494,8 @@ function renderOverview(d) {
     </div>
     <div class="section-title">Placa-Mãe</div>
     <div class="metrics-grid">
-      ${metricCard("Modelo", mobo.mobo_model || "—", "", mobo.mobo_manufacturer || "")}
-      ${metricCard("BIOS", mobo.bios_version || "—", "", "Versão instalada")}
+      ${metricCard("Modelo", mobo.mobo_model || "—", "", esc(mobo.mobo_manufacturer || ""), true)}
+      ${metricCard("BIOS", mobo.bios_version || "—", "", "Versão instalada", true)}
     </div>
     <div class="section-title">Utilização</div>
     <div class="gauges-grid">
@@ -568,15 +684,99 @@ function buildTempChartSVG(pontos, threshold) {
   </svg>`;
 }
 
+
+// ── Gráfico de pizza: situação geral dos computadores ────────────────
+const FLEET_COLORS = {
+  normal:  "var(--green)",
+  alerta:  "var(--yellow)",
+  critico: "var(--red)",
+  offline: "var(--text3)",
+};
+
+async function loadFleetPie() {
+  const box = $("fleetPie");
+  if (!box) return;
+  try {
+    const d = await fetchJSON(API.fleetSummary);
+    if (!d.ok) throw new Error("resposta inválida");
+    renderFleetPie(d);
+  } catch (e) {
+    box.innerHTML = `<div class="temp-chart-empty">Não foi possível carregar a situação geral.</div>`;
+  }
+}
+
+function renderFleetPie(d) {
+  const box = $("fleetPie");
+  const nota = d.sem_agente
+    ? `<div class="fleet-note mono-text">${d.sem_agente} de ${d.cadastrados} cadastrados ainda sem agente</div>` : "";
+  if (!d.total) {
+    box.innerHTML = `<div class="temp-chart-empty">${d.cadastrados ? "Nenhum computador enviando dados ainda." : "Nenhum computador cadastrado."}</div>${nota}`;
+    return;
+  }
+
+  const R = 80, C = 100;                       // raio e centro (viewBox 200x200)
+  const cats = d.categorias.filter(c => c.total > 0);
+  let ang = -Math.PI / 2;                      // começa no topo
+  const pt = (a, r = R) => [C + r * Math.cos(a), C + r * Math.sin(a)];
+
+  const fatias = cats.map(c => {
+    const frac = c.total / d.total;
+    const cor = FLEET_COLORS[c.chave];
+    const txt = c.chave === "offline" ? "#d0e0f0" : "#06101a";   // contraste do número na fatia
+    if (frac >= 0.9999) {                      // 100% numa categoria só
+      return `<circle cx="${C}" cy="${C}" r="${R}" fill="${cor}"><title>${esc(c.rotulo)}: ${c.total}</title></circle>
+              <text x="${C}" y="${C + 5}" text-anchor="middle" font-size="16" font-weight="700" fill="${txt}" font-family="var(--mono)">100%</text>`;
+    }
+    const a0 = ang, a1 = ang + frac * 2 * Math.PI;
+    ang = a1;
+    const [x0, y0] = pt(a0), [x1, y1] = pt(a1);
+    const grande = frac > 0.5 ? 1 : 0;
+    const [tx, ty] = pt((a0 + a1) / 2, R * 0.62);
+    const pct = Math.round(frac * 100);
+    const rotulo = frac >= 0.07
+      ? `<text x="${tx}" y="${ty + 4}" text-anchor="middle" font-size="12" font-weight="700" fill="${txt}" font-family="var(--mono)">${pct}%</text>`
+      : "";
+    return `<path d="M${C},${C} L${x0},${y0} A${R},${R} 0 ${grande} 1 ${x1},${y1} Z" fill="${cor}" stroke="var(--bg2)" stroke-width="2">
+              <title>${esc(c.rotulo)}: ${c.total} de ${d.total} (${pct}%)</title></path>${rotulo}`;
+  }).join("");
+
+  const problema = d.com_problema;
+  const manchete = problema
+    ? `<span class="fleet-num bad">${problema}</span> de ${d.total} monitorados com problema`
+    : `<span class="fleet-num ok">${d.total}</span> de ${d.total} monitorados sem problemas`;
+
+  const legenda = d.categorias.map(c => {
+    const pct = Math.round((c.total / d.total) * 100);
+    const lista = (c.pcs || []).join(", ");
+    return `<div class="fleet-row ${c.total ? "" : "zero"}" title="${esc(lista)}">
+      <span class="fleet-dot" style="background:${FLEET_COLORS[c.chave]}"></span>
+      <span class="fleet-name">${esc(c.rotulo)}</span>
+      <span class="fleet-count">${c.total}</span>
+      <span class="fleet-pct">${pct}%</span>
+    </div>`;
+  }).join("");
+
+  box.innerHTML = `
+    <div class="fleet-headline">${manchete}</div>
+    <svg class="fleet-svg" viewBox="0 0 200 200" role="img" aria-label="Gráfico de pizza com a situação dos computadores">${fatias}</svg>
+    <div class="fleet-legend">${legenda}</div>${nota}`;
+}
+
 // Monitor geral
 async function loadMonitorAll() {
   // Não espera os cartões: o gráfico geral é desenhado de imediato e
   // independe de haver (ou não) algum coletor ativo.
   loadOverviewTempChart();
+  loadFleetPie();
   monitorGrid.innerHTML = `<div style="color:var(--text3);font-family:var(--mono);font-size:12px;">Carregando...</div>`;
   try {
-    const list = await fetchJSON(API.search(""));
+    const todos = await fetchJSON(API.search(""));
+    const list = todos.filter(c => !c.sem_agente);   // sem agente: nada a monitorar ainda
     monitorGrid.innerHTML = "";
+    if (!list.length) {
+      monitorGrid.innerHTML = `<div style="color:var(--text3);font-family:var(--mono);font-size:12px;">Nenhum computador enviando dados ainda${todos.length ? ` (${todos.length} cadastrados aguardando o agente)` : ""}.</div>`;
+      return;
+    }
     for (const comp of list) monitorGrid.appendChild(await makeMonitorCard(comp));
   } catch (e) {
     monitorGrid.innerHTML = `<div style="color:var(--red);font-size:13px;">Erro ao carregar.</div>`;
@@ -597,7 +797,7 @@ async function loadOverviewTempChart() {
 }
 
 async function makeMonitorCard(comp) {
-  const statusLabel = { online:"Online", warning:"Alerta", offline:"Offline" };
+  const st = statusInfo(comp);
   const card = document.createElement("div");
   card.className = "monitor-card";
   card.innerHTML = `
@@ -606,7 +806,7 @@ async function makeMonitorCard(comp) {
         <div class="computer-code">${comp.code}</div>
         <div class="computer-label" style="font-size:12px;margin-top:2px;">${comp.label}</div>
       </div>
-      <span class="status-badge ${comp.status}"><span class="status-dot ${comp.status}"></span>${statusLabel[comp.status]}</span>
+      <span class="status-badge ${st.cls}"><span class="status-dot ${st.cls}"></span>${st.label}</span>
     </div>
     <div class="monitor-gauges" id="mg-${comp.code}">
       <div class="mono-text" style="font-size:11px;">${comp.status === "offline" ? "— Offline —" : "Carregando métricas..."}</div>
@@ -1433,6 +1633,583 @@ async function checkMyEmail() {
       });
     }
   } catch (e) {}
+}
+
+
+// ── Histórico de problemas (semanal / mensal) ─────────────────────────
+let histPeriodo = "semana";
+
+navBtns.history.addEventListener("click", () => {
+  setNavActive(navBtns.history);
+  showView(views.history, "Histórico de problemas");
+  clearRefresh();
+  loadHistory();
+  refreshTimer = setInterval(loadHistory, Math.max(REFRESH_MS, 30000));
+});
+
+document.querySelectorAll(".hist-periodo").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".hist-periodo").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    histPeriodo = btn.dataset.periodo;
+    loadHistory();
+  });
+});
+
+function fmtDuracao(min) {
+  min = Math.max(0, Math.round(min || 0));
+  if (min < 60) return `${min}min`;
+  const h = Math.floor(min / 60), m = min % 60;
+  if (h < 24) return m ? `${h}h ${m}min` : `${h}h`;
+  const d = Math.floor(h / 24), hr = h % 24;
+  return hr ? `${d}d ${hr}h` : `${d}d`;
+}
+
+function fmtDiaCurto(iso) {
+  const [, m, d] = iso.split("-");
+  return `${d}/${m}`;
+}
+
+async function loadHistory() {
+  const box = $("histContent");
+  try {
+    const d = await fetchJSON(API.history(histPeriodo));
+    if (!d.ok) { box.innerHTML = `<div class="temp-chart-empty">Não foi possível carregar o histórico.</div>`; return; }
+    renderHistory(d);
+  } catch (e) {
+    console.error(e);
+    box.innerHTML = `<div class="temp-chart-empty">Erro de conexão ao carregar o histórico.</div>`;
+  }
+}
+
+function histBarChart(dias) {
+  const max = Math.max(1, ...dias.map(x => x.total));
+  const many = dias.length > 10;
+  const cols = dias.map((x, i) => {
+    const hTot = Math.round((x.total / max) * 100);
+    const hCrit = x.total ? Math.round((x.criticos / x.total) * 100) : 0;
+    const label = many ? (i % 5 === 0 ? fmtDiaCurto(x.dia) : "") : fmtDiaCurto(x.dia);
+    return `<div class="hist-col" title="${fmtDiaCurto(x.dia)}: ${x.total} problema(s), ${x.criticos} vermelho(s)">
+      <div class="hist-col-num">${x.total || ""}</div>
+      <div class="hist-col-bar" style="height:${hTot}%">
+        <div class="hist-col-crit" style="height:${hCrit}%"></div>
+      </div>
+      <div class="hist-col-label">${label}</div>
+    </div>`;
+  }).join("");
+  return `<div class="hist-chart ${many ? "dense" : ""}">${cols}</div>
+    <div class="hist-legend mono-text"><span><i class="lg lg-all"></i>Todos os problemas</span><span><i class="lg lg-crit"></i>Vermelhos (crítico/offline)</span></div>`;
+}
+
+function histTable(titulo, cols, linhas, vazio) {
+  const head = cols.map(c => `<th>${c}</th>`).join("");
+  const body = linhas.length ? linhas.join("") : `<tr><td colspan="${cols.length}" class="hist-empty-row">${vazio}</td></tr>`;
+  return `<div class="hist-card"><div class="hist-card-title">${titulo}</div>
+    <div class="hist-table-wrap"><table class="hist-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div></div>`;
+}
+
+function histStat(label, valor, sub, cor = "") {
+  return `<div class="m-card hist-stat ${cor}"><div class="m-card-label">${esc(label)}</div>
+    <div class="m-card-val">${esc(valor)}</div><div class="m-card-sub">${esc(sub)}</div></div>`;
+}
+
+function renderHistory(d) {
+  const box = $("histContent");
+  const t = d.totais;
+  const rotuloPeriodo = d.periodo === "mes" ? "nos últimos 30 dias" : "nos últimos 7 dias";
+
+  if (!t.total) {
+    box.innerHTML = `<div class="hist-cards">${histStat("Problemas", 0, rotuloPeriodo)}</div>
+      <div class="empty-state"><div>Nenhum problema registrado ${rotuloPeriodo}.</div></div>`;
+    return;
+  }
+
+  const stats = `<div class="hist-cards">
+    ${histStat("Problemas", t.total, rotuloPeriodo)}
+    ${histStat("Vermelhos", t.criticos + t.offline, `${t.criticos} crítico(s) · ${t.offline} offline`, "red")}
+    ${histStat("Computadores afetados", t.pcs_afetados, "com pelo menos 1 problema")}
+    ${histStat("Em andamento", t.em_andamento, "ainda não resolvidos", t.em_andamento ? "yellow" : "")}
+    ${histStat("Tempo em problema", fmtDuracao(t.minutos), "soma de todos os eventos")}
+  </div>`;
+
+  const porPc = histTable("Computadores com mais problemas",
+    ["Computador", "Problemas", "Vermelhos", "Tempo"],
+    d.por_pc.map(p => `<tr><td><span class="mono-text">${esc(p.codigo)}</span><div>${esc(p.label)}</div></td>
+      <td>${p.total}</td><td class="${p.criticos ? "hist-red" : ""}">${p.criticos}</td><td>${fmtDuracao(p.minutos)}</td></tr>`),
+    "Sem dados.");
+
+  const porTipo = histTable("Tipos de problema",
+    ["Tipo", "Ocorrências"],
+    d.por_tipo.map(x => `<tr><td>${esc(x.rotulo)}</td><td>${x.total}</td></tr>`),
+    "Sem dados.");
+
+  const dot = { offline: "offline", warning: "warning", critical: "critical" };
+  const lista = d.eventos.map(ev => `<div class="notif-row read hist-ev">
+      <div class="notif-dot ${dot[ev.nivel] || "warning"}"></div>
+      <div class="notif-body">
+        <div class="notif-msg">${esc(ev.mensagem)}</div>
+        <div class="notif-meta">
+          <span>${esc(fmtDateTime(ev.criado_em))}</span>
+          <span class="notif-tag ${ev.ativo ? "ativo" : "resolvido"}">${ev.ativo ? "Em andamento" : "Resolvido"}</span>
+          <span>${fmtDuracao(ev.dur_min)}</span>
+        </div>
+      </div>
+    </div>`).join("");
+
+  box.innerHTML = `${stats}
+    <div class="hist-card"><div class="hist-card-title">Problemas por dia</div>${histBarChart(d.por_dia)}</div>
+    <div class="hist-grid">${porPc}${porTipo}</div>
+    <div class="hist-card"><div class="hist-card-title">Ocorrências do período${d.eventos.length < t.total ? ` (mostrando as ${d.eventos.length} mais recentes)` : ""}</div>
+      <div class="notif-list" style="max-width:none">${lista}</div></div>
+    ${d.truncado ? `<div class="mono-text">Há mais de 3000 ocorrências no período; o resumo considera só as 3000 mais recentes.</div>` : ""}`;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Plantas do campus — bolinhas de status por sala
+// ══════════════════════════════════════════════════════════════════
+// Cada bolinha fica numa posição (x/y em % da imagem) da planta e está
+// ligada a uma ou mais salas do cadastro. Cor e números vêm do servidor
+// (api/plantas.php), calculados ao vivo a partir do status dos PCs.
+// Só administradores veem o botão "Editar bolinhas".
+
+let voltarParaPlantas = false;   // true quando um computador foi aberto a partir de uma planta
+
+const PL = {
+  data: null,          // última resposta da API
+  admin: false,
+  current: null,       // id da planta aberta (ex.: "principal-terreo")
+  selected: null,      // id do marcador selecionado
+  edit: false,         // modo de edição ligado?
+  draft: null,         // marcador sendo criado/editado {id, planta, x, y, nome, salas:Set, nomeTocado}
+  pending: null,       // sala escolhida em "salas sem bolinha", esperando o clique na planta
+  salaFiltro: "",
+  claro: localStorage.getItem("sysmon_planta_claro") === "1",
+  salvando: false,
+};
+
+const COR_ROTULO = { verde: "Tudo online e sem problemas", vermelho: "Com problemas / algum offline", cinza: "Offline ou sem agente" };
+const CAT_ROTULO = { ok: "Sem problemas", problema: "Com problemas", offline: "Offline", sem_agente: "Sem agente" };
+
+const plView   = () => $("viewPlantas");
+const plPlanta = () => PL.data && PL.data.plantas.find(p => p.id === PL.current);
+const plAcha   = id => { for (const p of PL.data.plantas) { const m = p.marcadores.find(x => x.id === id); if (m) return { planta: p, marcador: m }; } return null; };
+
+function abrirPlantas() {
+  voltarParaPlantas = false;
+  setNavActive(navBtns.plantas);
+  showView(views.plantas, "Plantas do campus");
+  clearRefresh();
+  loadPlantas();
+  // Não redesenha enquanto o admin está editando/arrastando (perderia o que digitou).
+  refreshTimer = setInterval(() => { if (!PL.draft && !PL.salvando) loadPlantas(true); }, REFRESH_MS);
+}
+
+navBtns.plantas.addEventListener("click", abrirPlantas);
+
+// Ao usar qualquer item do menu, o "voltar" do detalhe deixa de apontar para as plantas.
+document.querySelectorAll(".nav-btn").forEach(b => b.addEventListener("click", () => { if (b !== navBtns.plantas) voltarParaPlantas = false; }));
+
+async function loadPlantas(silencioso = false) {
+  try {
+    const d = await fetch(API.plantas).then(r => r.json());
+    if (!d.ok) throw new Error(d.error || "Erro ao carregar as plantas.");
+    PL.data = d;
+    PL.admin = !!d.admin;
+    if (!PL.current || !plPlanta()) {
+      const comMarcador = d.plantas.find(p => p.marcadores.length);
+      PL.current = (comMarcador || d.plantas[0]).id;
+    }
+    if (PL.selected && !plAcha(PL.selected)) PL.selected = null;
+    renderPlantas();
+  } catch (e) {
+    console.error(e);
+    if (!silencioso) $("plantaStage").innerHTML = `<div class="temp-chart-empty">${esc(e.message || "Erro ao carregar as plantas.")}</div>`;
+  }
+}
+
+function renderPlantas() {
+  renderPlantaSummary();
+  renderPlantaTabs();
+  renderPlantaStage();
+  renderPlantaSide();
+  renderPlantaLivres();
+  renderPlantaHint();
+}
+
+// ── Resumo geral ────────────────────────────────
+function renderPlantaSummary() {
+  const g = PL.data.geral;
+  const chip = (cls, v, rot) => `<div class="planta-chip ${cls}"><span class="planta-chip-val">${v}</span><span class="planta-chip-rot">${rot}</span></div>`;
+  $("plantaSummary").innerHTML =
+    chip("", g.total, "Computadores cadastrados") +
+    chip("verde", g.ok, "Online, sem problemas") +
+    chip("vermelho", g.problema, "Com problemas") +
+    chip("cinza", g.offline, "Offline") +
+    chip("dim", g.sem_agente, "Sem agente") +
+    chip("dim", PL.data.mapeados, "Já ligados a uma bolinha");
+}
+
+// ── Abas: prédio → andar ────────────────────────
+function corDaPlanta(p) {
+  if (!p.marcadores.length) return "";
+  if (p.marcadores.some(m => m.cor === "vermelho")) return "vermelho";
+  if (p.marcadores.some(m => m.cor === "verde")) return "verde";
+  return "cinza";
+}
+
+function renderPlantaTabs() {
+  const predios = [...new Set(PL.data.plantas.map(p => p.predio))];
+  $("plantaTabs").innerHTML = predios.map(predio => {
+    const abas = PL.data.plantas.filter(p => p.predio === predio).map(p => {
+      const c = corDaPlanta(p);
+      return `<button type="button" class="planta-tab ${p.id === PL.current ? "active" : ""}" data-planta="${esc(p.id)}">
+        ${c ? `<span class="planta-tab-dot ${c}"></span>` : ""}${esc(p.andar)}
+        <span class="planta-tab-n">${p.marcadores.length}</span></button>`;
+    }).join("");
+    return `<div class="planta-tab-group"><span class="planta-tab-label">Prédio ${esc(predio)}</span>${abas}</div>`;
+  }).join("");
+
+  $("plantaTabs").querySelectorAll(".planta-tab").forEach(b => b.addEventListener("click", () => {
+    if (PL.draft && !confirm("Descartar o marcador que está sendo editado?")) return;
+    PL.current = b.dataset.planta;
+    PL.draft = null;
+    PL.selected = null;
+    renderPlantas();
+  }));
+}
+
+// ── A planta + bolinhas ─────────────────────────
+function textoTooltip(m) {
+  const n = m.n;
+  return `${m.nome} — ${n.total} PC(s): ${n.ok} sem problemas, ${n.problema} com problemas, ${n.offline} offline` +
+         (n.sem_agente ? `, ${n.sem_agente} sem agente` : "");
+}
+
+function dotHTML(m, extra = "") {
+  const n = m.n.total;
+  return `<button type="button" class="planta-dot cor-${m.cor} ${m.id === PL.selected ? "sel" : ""} ${n > 99 ? "big" : ""} ${extra}"
+      data-id="${m.id}" style="left:${m.x}%;top:${m.y}%" title="${esc(textoTooltip(m))}">
+      <span class="planta-dot-num">${n}</span>
+      <span class="planta-dot-label">${esc(m.nome)}</span>
+    </button>`;
+}
+
+function renderPlantaStage() {
+  const p = plPlanta();
+  const stage = $("plantaStage");
+  const ghost = PL.draft && PL.draft.planta === p.id && !PL.draft.id
+    ? `<span class="planta-dot ghost" style="left:${PL.draft.x}%;top:${PL.draft.y}%"><span class="planta-dot-num">+</span></span>` : "";
+
+  stage.innerHTML = `
+    <div class="planta-canvas ${PL.claro ? "claro" : ""} ${PL.edit ? "editando" : ""}" id="plantaCanvas">
+      <img src="${esc(p.arquivo)}" alt="Planta — Prédio ${esc(p.predio)}, ${esc(p.andar)}" draggable="false"/>
+      <div class="planta-markers">${p.marcadores.map(m => dotHTML(m, PL.draft && PL.draft.id === m.id ? "sel" : "")).join("")}${ghost}</div>
+    </div>
+    <div class="planta-legenda">
+      <span><i class="planta-lg verde"></i>${COR_ROTULO.verde}</span>
+      <span><i class="planta-lg vermelho"></i>${COR_ROTULO.vermelho}</span>
+      <span><i class="planta-lg cinza"></i>${COR_ROTULO.cinza}</span>
+      <span class="planta-lg-note">Prédio ${esc(p.predio)} · ${esc(p.andar)}</span>
+    </div>
+    ${p.marcadores.length || PL.edit ? "" : `<div class="planta-vazia">Nenhuma sala marcada nesta planta ainda.${PL.admin ? " Use <b>✎ Editar bolinhas</b> para posicionar as salas." : ""}</div>`}`;
+
+  const canvas = $("plantaCanvas");
+  $("plantaTema").textContent = PL.claro ? "Fundo escuro" : "Fundo claro";
+
+  canvas.querySelectorAll(".planta-dot[data-id]").forEach(dot => {
+    dot.addEventListener("click", e => {
+      e.stopPropagation();
+      if (PL.edit) return;                       // no modo edição, o clique é tratado pelo pointerup (arrastar/abrir)
+      selecionarMarcador(+dot.dataset.id);
+    });
+    dot.addEventListener("pointerdown", e => { if (PL.edit) iniciarArraste(e, dot); });
+  });
+
+  canvas.addEventListener("click", e => {
+    if (!PL.edit || e.target.closest(".planta-dot")) return;
+    const r = canvas.getBoundingClientRect();
+    novoRascunho((e.clientX - r.left) / r.width * 100, (e.clientY - r.top) / r.height * 100);
+  });
+}
+
+function selecionarMarcador(id) {
+  PL.selected = PL.selected === id ? null : id;
+  document.querySelectorAll("#plantaCanvas .planta-dot[data-id]").forEach(d => d.classList.toggle("sel", +d.dataset.id === PL.selected));
+  renderPlantaSide();
+}
+
+// ── Arrastar uma bolinha (modo edição) ──────────
+function iniciarArraste(e, dot) {
+  e.preventDefault();
+  const canvas = $("plantaCanvas");
+  const rect = canvas.getBoundingClientRect();
+  const id = +dot.dataset.id;
+  const x0 = e.clientX, y0 = e.clientY;
+  let moveu = false, nx = null, ny = null;
+  try { dot.setPointerCapture(e.pointerId); } catch (_) { /* ok */ }
+
+  const mover = ev => {
+    if (!moveu && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
+    moveu = true;
+    nx = Math.min(100, Math.max(0, (ev.clientX - rect.left) / rect.width * 100));
+    ny = Math.min(100, Math.max(0, (ev.clientY - rect.top) / rect.height * 100));
+    dot.style.left = nx + "%";
+    dot.style.top = ny + "%";
+  };
+  const soltar = async () => {
+    dot.removeEventListener("pointermove", mover);
+    dot.removeEventListener("pointerup", soltar);
+    dot.removeEventListener("pointercancel", soltar);
+    if (!moveu) { abrirRascunhoDe(id); return; }          // foi só um clique: abre a edição
+    PL.salvando = true;
+    try {
+      const d = await postPlantas({ acao: "mover", id, x: +nx.toFixed(3), y: +ny.toFixed(3) });
+      if (!d.ok) throw new Error(d.error);
+      const f = plAcha(id); if (f) { f.marcador.x = nx; f.marcador.y = ny; }
+      if (PL.draft && PL.draft.id === id) { PL.draft.x = +nx.toFixed(3); PL.draft.y = +ny.toFixed(3); }
+    } catch (err) {
+      alert(err.message || "Não foi possível mover a bolinha.");
+      await loadPlantas(true);
+    } finally { PL.salvando = false; }
+  };
+  dot.addEventListener("pointermove", mover);
+  dot.addEventListener("pointerup", soltar);
+  dot.addEventListener("pointercancel", soltar);
+}
+
+async function postPlantas(body) {
+  const r = await fetch(API.plantas, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return r.json();
+}
+
+// ── Painel lateral ──────────────────────────────
+function boxNum(cls, v, rot) {
+  return `<div class="planta-num ${cls}"><div class="planta-num-v">${v}</div><div class="planta-num-r">${rot}</div></div>`;
+}
+
+function renderPlantaSide() {
+  const side = $("plantaSide");
+  if (PL.edit && PL.draft) { side.innerHTML = editorHTML(); ligarEditor(); return; }
+
+  const p = plPlanta();
+  let html = "";
+
+  const sel = PL.selected ? plAcha(PL.selected) : null;
+  if (sel && sel.planta.id === p.id) {
+    const m = sel.marcador, n = m.n;
+    const nomesSalas = m.salas.length > 1 || (m.salas[0] && m.salas[0] !== m.nome) ? `<div class="planta-det-salas">${m.salas.map(esc).join(" · ")}</div>` : "";
+    html += `<div class="m-card planta-det">
+      <div class="planta-det-top">
+        <span class="planta-dot-mini cor-${m.cor}"></span>
+        <div class="planta-det-nome">${esc(m.nome)}</div>
+        <button type="button" class="planta-x" id="plantaFechar" title="Fechar">×</button>
+      </div>
+      ${nomesSalas}
+      <div class="planta-det-cor">${COR_ROTULO[m.cor]}</div>
+      <div class="planta-nums">
+        ${boxNum("", n.total, "Computadores")}
+        ${boxNum("verde", n.ok, "Sem problemas")}
+        ${boxNum("vermelho", n.problema, "Com problemas")}
+        ${boxNum("cinza", n.offline, "Offline")}
+        ${n.sem_agente ? boxNum("dim", n.sem_agente, "Sem agente") : ""}
+      </div>
+      <div class="planta-pcs">${m.pcs.map(pc => `<button type="button" class="planta-pc cat-${pc.cat}" data-code="${esc(pc.code)}" title="${esc(CAT_ROTULO[pc.cat])} — ${esc(pc.sala)}">${esc(pc.code)}</button>`).join("")}</div>
+      ${PL.admin ? `<button type="button" class="btn-row-action" id="plantaEditarSel">Editar esta bolinha</button>` : ""}
+    </div>`;
+  }
+
+  html += `<div class="section-title">Salas neste andar (${p.marcadores.length})</div>`;
+  if (!p.marcadores.length) {
+    html += `<div class="planta-side-vazio">Nenhuma sala marcada neste andar.</div>`;
+  } else {
+    html += `<div class="planta-lista">` + p.marcadores.slice().sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR", { numeric: true })).map(m => {
+      const n = m.n;
+      return `<button type="button" class="planta-row ${m.id === PL.selected ? "sel" : ""}" data-id="${m.id}">
+        <span class="planta-dot-mini cor-${m.cor}"></span>
+        <span class="planta-row-main">
+          <span class="planta-row-nome">${esc(m.nome)}</span>
+          <span class="planta-row-sub">${n.total} PC${n.total === 1 ? "" : "s"} · ${n.ok} ok · ${n.problema} c/ problema · ${n.offline} offline${n.sem_agente ? ` · ${n.sem_agente} s/ agente` : ""}</span>
+        </span>
+      </button>`;
+    }).join("") + `</div>`;
+  }
+  side.innerHTML = html;
+
+  side.querySelectorAll(".planta-row").forEach(b => b.addEventListener("click", () => selecionarMarcador(+b.dataset.id)));
+  const fechar = $("plantaFechar"); if (fechar) fechar.addEventListener("click", () => selecionarMarcador(PL.selected));
+  const ed = $("plantaEditarSel"); if (ed) ed.addEventListener("click", () => { PL.edit = true; atualizarBotaoEdicao(); abrirRascunhoDe(PL.selected); });
+  side.querySelectorAll(".planta-pc").forEach(b => b.addEventListener("click", () => abrirComputadorDaPlanta(b.dataset.code)));
+}
+
+async function abrirComputadorDaPlanta(code) {
+  try {
+    const comp = await fetch(API.computer(code)).then(r => r.json());
+    if (comp.error) throw new Error(comp.error);
+    voltarParaPlantas = true;
+    clearRefresh();
+    openComputer(comp);
+  } catch (e) { console.error(e); alert("Não foi possível abrir o computador."); }
+}
+
+// ── Salas ainda sem bolinha ─────────────────────
+function renderPlantaLivres() {
+  const box = $("plantaLivres");
+  const l = PL.data.salas_livres;
+  if (!l.length && !PL.data.sem_sala) { box.innerHTML = ""; return; }
+  const chips = l.map(s => `<button type="button" class="planta-livre ${PL.pending === s.sala ? "sel" : ""}" data-sala="${esc(s.sala)}" ${PL.edit ? "" : "disabled"}>${esc(s.sala)} <b>${s.total}</b></button>`).join("");
+  box.innerHTML = `
+    <div class="section-title">Salas ainda sem bolinha (${l.length})</div>
+    <div class="planta-livres-chips">${chips || '<span class="mono-text">Todas as salas já têm bolinha.</span>'}</div>
+    ${PL.edit && l.length ? `<div class="settings-hint">Clique numa sala e depois no ponto da planta onde ela fica.</div>` : (l.length && PL.admin ? `<div class="settings-hint">Ative <b>✎ Editar bolinhas</b> para posicionar estas salas nas plantas.</div>` : "")}
+    ${PL.data.sem_sala ? `<div class="settings-hint">${PL.data.sem_sala} computador(es) estão sem sala cadastrada e não aparecem em nenhuma bolinha.</div>` : ""}`;
+  box.querySelectorAll(".planta-livre").forEach(b => b.addEventListener("click", () => {
+    if (!PL.edit) return;
+    PL.pending = PL.pending === b.dataset.sala ? null : b.dataset.sala;
+    renderPlantaLivres(); renderPlantaHint();
+  }));
+}
+
+// ── Modo edição (só admin) ──────────────────────
+function atualizarBotaoEdicao() {
+  const b = $("plantaEditToggle");
+  if (b) b.textContent = PL.edit ? "✓ Concluir edição" : "✎ Editar bolinhas";
+  if (b) b.classList.toggle("ativo", PL.edit);
+}
+
+function renderPlantaHint() {
+  const h = $("plantaEditHint");
+  if (!PL.edit) { h.classList.add("hidden"); return; }
+  h.classList.remove("hidden");
+  h.innerHTML = PL.pending
+    ? `Agora clique na planta onde fica <b>${esc(PL.pending)}</b>.`
+    : `<b>Modo edição:</b> clique num ponto vazio da planta para criar uma bolinha · arraste uma bolinha para mover · clique nela para editar as salas ou excluir.`;
+}
+
+const editToggle = $("plantaEditToggle");
+if (editToggle) {
+  editToggle.addEventListener("click", () => {
+    if (PL.edit && PL.draft && !confirm("Descartar o marcador que está sendo editado?")) return;
+    PL.edit = !PL.edit;
+    PL.draft = null; PL.pending = null;
+    atualizarBotaoEdicao();
+    renderPlantas();
+  });
+}
+
+$("plantaTema").addEventListener("click", () => {
+  PL.claro = !PL.claro;
+  localStorage.setItem("sysmon_planta_claro", PL.claro ? "1" : "0");
+  const c = $("plantaCanvas"); if (c) c.classList.toggle("claro", PL.claro);
+  $("plantaTema").textContent = PL.claro ? "Fundo escuro" : "Fundo claro";
+});
+
+function novoRascunho(x, y) {
+  const p = plPlanta();
+  const sala = PL.pending;
+  PL.draft = { id: null, planta: p.id, x: +x.toFixed(3), y: +y.toFixed(3), nome: sala || "", salas: new Set(sala ? [sala] : []), nomeTocado: false };
+  PL.pending = null; PL.salaFiltro = ""; PL.selected = null;
+  renderPlantas();
+}
+
+function abrirRascunhoDe(id) {
+  const f = plAcha(id);
+  if (!f) return;
+  PL.draft = { id, planta: f.planta.id, x: f.marcador.x, y: f.marcador.y, nome: f.marcador.nome, salas: new Set(f.marcador.salas), nomeTocado: true };
+  PL.salaFiltro = ""; PL.selected = id;
+  if (PL.current !== f.planta.id) PL.current = f.planta.id;
+  renderPlantas();
+}
+
+// Todas as salas conhecidas, com quantos PCs e em qual bolinha já estão.
+function todasAsSalas() {
+  const mapa = new Map();
+  PL.data.salas_livres.forEach(s => mapa.set(s.sala, { sala: s.sala, total: s.total, em: null }));
+  PL.data.plantas.forEach(p => p.marcadores.forEach(m => {
+    const cont = {};
+    m.pcs.forEach(pc => { cont[pc.sala] = (cont[pc.sala] || 0) + 1; });
+    m.salas.forEach(s => mapa.set(s, { sala: s, total: cont[s] || 0, em: { id: m.id, nome: m.nome, planta: p } }));
+  }));
+  return [...mapa.values()].sort((a, b) => a.sala.localeCompare(b.sala, "pt-BR", { numeric: true }));
+}
+
+function editorHTML() {
+  const d = PL.draft;
+  return `<div class="m-card planta-editor">
+    <div class="form-card-title">${d.id ? "Editar bolinha" : "Nova bolinha"} · ${esc(plPlanta().andar)} (${esc(plPlanta().predio)})</div>
+    <label class="settings-label" for="pdNome">Nome mostrado na planta</label>
+    <input class="settings-input" id="pdNome" maxlength="100" value="${esc(d.nome)}" placeholder="Ex.: Lab. de Informática 1" autocomplete="off"/>
+    <label class="settings-label" for="pdFiltro" style="margin-top:14px;">Salas ligadas a esta bolinha</label>
+    <input class="settings-input" id="pdFiltro" value="${esc(PL.salaFiltro)}" placeholder="Filtrar salas..." autocomplete="off"/>
+    <div class="planta-sala-list" id="pdSalas"></div>
+    <div class="settings-hint">Marque mais de uma sala quando a planilha usa nomes diferentes para o mesmo lugar (ex.: LAB. GAMES e LAB. JOGOS). Uma sala só pode estar em uma bolinha.</div>
+    <div class="settings-msg" id="pdMsg"></div>
+    <div class="planta-editor-btns">
+      <button type="button" class="btn-settings-save" id="pdSalvar">Salvar</button>
+      <button type="button" class="btn-row-action" id="pdCancelar">Cancelar</button>
+      ${d.id ? `<button type="button" class="btn-row-action danger" id="pdExcluir">Excluir bolinha</button>` : ""}
+    </div>
+  </div>`;
+}
+
+function desenharListaSalas() {
+  const d = PL.draft;
+  const f = PL.salaFiltro.trim().toLowerCase();
+  const box = $("pdSalas");
+  const lista = todasAsSalas().filter(s => !f || s.sala.toLowerCase().includes(f));
+  // marcadas primeiro, depois as livres, por fim as que já pertencem a outra bolinha
+  const peso = s => d.salas.has(s.sala) ? 0 : (!s.em ? 1 : 2);
+  lista.sort((a, b) => peso(a) - peso(b) || a.sala.localeCompare(b.sala, "pt-BR", { numeric: true }));
+  box.innerHTML = lista.map(s => {
+    const outra = s.em && s.em.id !== d.id;
+    return `<label class="planta-sala-item ${outra ? "outra" : ""}">
+      <input type="checkbox" value="${esc(s.sala)}" ${d.salas.has(s.sala) ? "checked" : ""}/>
+      <span class="planta-sala-nome">${esc(s.sala)}</span>
+      <span class="planta-sala-n">${s.total} PC${s.total === 1 ? "" : "s"}</span>
+      ${outra ? `<span class="planta-sala-em" title="Ao marcar, a sala sai da outra bolinha">hoje em «${esc(s.em.nome)}» (${esc(s.em.planta.andar)}, ${esc(s.em.planta.predio)})</span>` : ""}
+    </label>`;
+  }).join("") || `<div class="planta-side-vazio">Nenhuma sala encontrada.</div>`;
+
+  box.querySelectorAll("input[type=checkbox]").forEach(cb => cb.addEventListener("change", () => {
+    if (cb.checked) d.salas.add(cb.value); else d.salas.delete(cb.value);
+    const nomeEl = $("pdNome");
+    if (!d.nomeTocado && d.salas.size) { d.nome = [...d.salas][0]; nomeEl.value = d.nome; }
+  }));
+}
+
+function ligarEditor() {
+  const d = PL.draft;
+  desenharListaSalas();
+  $("pdNome").addEventListener("input", e => { d.nome = e.target.value; d.nomeTocado = true; });
+  $("pdFiltro").addEventListener("input", e => { PL.salaFiltro = e.target.value; desenharListaSalas(); });
+
+  const msg = (t, ok = false) => { const m = $("pdMsg"); m.textContent = t; m.className = "settings-msg " + (t ? (ok ? "show-ok" : "show-error") : ""); };
+
+  $("pdCancelar").addEventListener("click", () => { PL.draft = null; renderPlantas(); });
+
+  $("pdSalvar").addEventListener("click", async () => {
+    if (!d.salas.size) { msg("Marque ao menos uma sala."); return; }
+    const btn = $("pdSalvar"); btn.disabled = true; PL.salvando = true;
+    try {
+      const r = await postPlantas({ acao: "salvar", id: d.id, planta: d.planta, nome: d.nome.trim(), x: d.x, y: d.y, salas: [...d.salas] });
+      if (!r.ok) throw new Error(r.error || "Erro ao salvar.");
+      PL.draft = null; PL.selected = r.id;
+      await loadPlantas(true);
+    } catch (e) { msg(e.message); btn.disabled = false; }
+    finally { PL.salvando = false; }
+  });
+
+  const ex = $("pdExcluir");
+  if (ex) ex.addEventListener("click", async () => {
+    if (!confirm(`Excluir a bolinha "${d.nome}"? As salas voltam para a lista de salas sem bolinha.`)) return;
+    ex.disabled = true; PL.salvando = true;
+    try {
+      const r = await postPlantas({ acao: "excluir", id: d.id });
+      if (!r.ok) throw new Error(r.error || "Erro ao excluir.");
+      PL.draft = null; PL.selected = null;
+      await loadPlantas(true);
+    } catch (e) { msg(e.message); ex.disabled = false; }
+    finally { PL.salvando = false; }
+  });
 }
 
 // Init

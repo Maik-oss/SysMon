@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS computadores (
     codigo             VARCHAR(20) PRIMARY KEY,
     label              VARCHAR(100) NOT NULL,
     location           VARCHAR(100) DEFAULT NULL,
+    patrimonio         VARCHAR(10)  DEFAULT NULL,
+    sala               VARCHAR(100) DEFAULT NULL,
+    modelo             VARCHAR(150) DEFAULT NULL,
+    situacao           VARCHAR(30)  DEFAULT NULL,
     mobo_manufacturer  VARCHAR(100) DEFAULT NULL,
     mobo_model         VARCHAR(150) DEFAULT NULL,
     bios_version       VARCHAR(100) DEFAULT NULL,
@@ -215,3 +219,38 @@ CREATE TABLE IF NOT EXISTS manutencoes (
 UPDATE usuarios SET email = 'maikson.santiago@escolar.ifrn.edu.br' WHERE usuario = 'maikson' AND (email IS NULL OR email = '');
 UPDATE usuarios SET email = 'samuel.pedrosa@escolar.ifrn.edu.br'   WHERE usuario = 'samuel'  AND (email IS NULL OR email = '');
 UPDATE usuarios SET email = 'm.gessle@escolar.ifrn.edu.br'          WHERE usuario = 'matheus' AND (email IS NULL OR email = '');
+
+-- ── Cadastro vindo da planilha do campus ────────────────────────────
+-- patrimonio, sala, modelo e situacao. O painel cria estas colunas sozinho
+-- (ensure_schema) e o script importar_computadores.php preenche os dados.
+-- Se rodar à mão e a coluna já existir, "Duplicate column name" é inofensivo.
+ALTER TABLE computadores ADD COLUMN patrimonio VARCHAR(10) DEFAULT NULL;
+ALTER TABLE computadores ADD COLUMN sala VARCHAR(100) DEFAULT NULL;
+ALTER TABLE computadores ADD COLUMN modelo VARCHAR(150) DEFAULT NULL;
+ALTER TABLE computadores ADD COLUMN situacao VARCHAR(30) DEFAULT NULL;
+
+
+-- ── Plantas do campus ───────────────────────────────────────────────
+-- Cada marcador é uma bolinha numa posição (x/y em % da imagem) de uma
+-- planta (static/plantas/*.svg, lista em includes/plantas.php) e fica
+-- ligado a uma ou mais salas do cadastro (computadores.sala). A cor e as
+-- contagens vêm do status ao vivo dos computadores. O painel cria estas
+-- tabelas sozinho (ensure_schema); rode à mão só se preferir.
+CREATE TABLE IF NOT EXISTS planta_marcadores (
+    id          INT AUTO_INCREMENT PRIMARY KEY,
+    planta      VARCHAR(40)  NOT NULL,
+    nome        VARCHAR(100) NOT NULL,
+    x           DECIMAL(6,3) NOT NULL,
+    y           DECIMAL(6,3) NOT NULL,
+    criado_por  VARCHAR(50)  DEFAULT NULL,
+    criado_em   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_planta (planta)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS planta_marcador_salas (
+    sala         VARCHAR(100) NOT NULL PRIMARY KEY,
+    marcador_id  INT NOT NULL,
+    CONSTRAINT fk_pms_marcador
+        FOREIGN KEY (marcador_id) REFERENCES planta_marcadores(id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

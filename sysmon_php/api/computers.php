@@ -24,7 +24,8 @@ if ($code !== null) {
 $computers = fetch_computers();
 $results = [];
 foreach ($computers as $c => $info) {
-    if ($q === '' || strpos($c, $q) !== false || strpos(strtoupper($info['label']), $q) !== false) {
+    $texto = strtoupper($info['label'] . ' ' . $info['patrimonio'] . ' ' . $info['sala'] . ' ' . $info['modelo']);
+    if ($q === '' || strpos($c, $q) !== false || strpos($texto, $q) !== false) {
         $results[] = array_merge(['code' => $c], $info);
     }
 }

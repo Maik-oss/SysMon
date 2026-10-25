@@ -11,6 +11,7 @@ $computers = fetch_computers();
 
 $counts = ['online' => 0, 'warning' => 0, 'offline' => 0];
 foreach ($computers as $info) {
+    if ($info['sem_agente']) { continue; }   // ainda sem agente: não conta como offline
     $counts[$info['status']]++;
 }
 

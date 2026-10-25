@@ -62,6 +62,16 @@ $isAdmin = is_admin();
         <span class="badge-warn" id="notifBadge">0</span>
       </button>
 
+      <button class="nav-btn" id="btnHistory" data-action="history">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="7.5"/><path d="M10 5.5V10l3 2"/></svg>
+        Histórico
+      </button>
+
+      <button class="nav-btn" id="btnPlantas" data-action="plantas">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4.5l5-2 6 2 5-2v13l-5 2-6-2-5 2z"/><path d="M7 2.5v13M13 4.5v13"/></svg>
+        Plantas do campus
+      </button>
+
       <div class="nav-section-label" style="margin-top:20px;">Sistema</div>
 
       <button class="nav-btn" id="btnSettings" data-action="settings">
@@ -109,14 +119,25 @@ $isAdmin = is_admin();
     <div class="view active" id="viewListComputers">
       <div class="view-header">
         <h2 class="view-title">Computadores</h2>
-        <p class="view-sub">Digite o código CM para buscar um computador</p>
+        <p class="view-sub">Busque por código, patrimônio ou sala e filtre por sala e modelo</p>
       </div>
       <div class="search-bar-wrap">
         <div class="search-bar">
           <svg class="search-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M16 16l-3.5-3.5"/></svg>
-          <input class="search-input" id="computerSearch" type="text" placeholder="Buscar: CM000001..." maxlength="8" autocomplete="off"/>
-          <span class="search-hint mono-text" id="searchHint">CM + 6 dígitos</span>
+          <input class="search-input" id="computerSearch" type="text" placeholder="Buscar: CM406652..." maxlength="12" autocomplete="off"/>
+          <span class="search-hint mono-text" id="searchHint">CM + patrimônio</span>
         </div>
+      </div>
+      <div class="list-filters">
+        <select class="settings-input list-filter" id="filterSala"><option value="">Todas as salas</option></select>
+        <select class="settings-input list-filter" id="filterModelo"><option value="">Todos os modelos</option></select>
+        <select class="settings-input list-filter" id="filterAgente">
+          <option value="">Com e sem agente</option>
+          <option value="com">Só com agente (monitorados)</option>
+          <option value="sem">Só sem agente</option>
+        </select>
+        <button class="btn-row-action" id="filterClear" type="button">Limpar filtros</button>
+        <span class="mono-text list-count" id="listCount"></span>
       </div>
       <div class="computer-grid" id="computerGrid"></div>
       <div class="empty-state hidden" id="emptyState">
@@ -144,6 +165,8 @@ $isAdmin = is_admin();
         </button>
         <?php endif; ?>
       </div>
+
+      <div class="cadastro-info" id="cadastroInfo"></div>
 
       <div class="category-tabs" id="categoryTabs">
         <button class="cat-btn active" data-cat="overview">
@@ -201,15 +224,23 @@ $isAdmin = is_admin();
         <p class="view-sub">Status em tempo real de todos os computadores</p>
       </div>
 
-      <div class="section-title">Temperatura atual — todos os PCs</div>
-      <div class="m-card temp-chart-wrap" style="margin-bottom:26px;">
-        <div class="temp-chart-legend">
-          <span><span class="temp-chart-dot" style="background:var(--cyan);"></span>CPU</span>
-          <span><span class="temp-chart-dot" style="background:#ff8a3d;"></span>GPU</span>
-          <span><span class="temp-chart-dot" style="background:var(--red);"></span>Acima do limite (85°C)</span>
-          <span><span class="temp-chart-dot" style="background:var(--text3);opacity:.5;"></span>PC offline (último valor registrado)</span>
+      <div class="overview-top">
+        <div class="overview-col">
+          <div class="section-title">Temperatura atual — todos os PCs</div>
+          <div class="m-card temp-chart-wrap">
+            <div class="temp-chart-legend">
+              <span><span class="temp-chart-dot" style="background:var(--cyan);"></span>CPU</span>
+              <span><span class="temp-chart-dot" style="background:#ff8a3d;"></span>GPU</span>
+              <span><span class="temp-chart-dot" style="background:var(--red);"></span>Acima do limite (85°C)</span>
+              <span><span class="temp-chart-dot" style="background:var(--text3);opacity:.5;"></span>PC offline (último valor registrado)</span>
+            </div>
+            <div id="overviewTempChart"><div class="temp-chart-empty">Carregando...</div></div>
+          </div>
         </div>
-        <div id="overviewTempChart"><div class="temp-chart-empty">Carregando...</div></div>
+        <div class="overview-col overview-pie-col">
+          <div class="section-title">Situação geral dos computadores</div>
+          <div class="m-card fleet-pie-card" id="fleetPie"><div class="temp-chart-empty">Carregando...</div></div>
+        </div>
       </div>
 
       <div class="monitor-grid" id="monitorGrid"></div>
@@ -249,6 +280,48 @@ $isAdmin = is_admin();
         <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M24 8v16M24 34v2"/><circle cx="24" cy="24" r="20"/></svg>
         <div>Nenhuma notificação com esse filtro</div>
       </div>
+    </div>
+
+    <!-- VIEW: HISTÓRICO DE PROBLEMAS (semanal / mensal) -->
+    <div class="view" id="viewHistory">
+      <div class="view-header">
+        <h2 class="view-title">Histórico de problemas</h2>
+        <p class="view-sub">Resumo das notificações por semana ou mês, por computador e por tipo de problema</p>
+      </div>
+      <div class="hist-controls">
+        <button class="notif-filter-btn hist-periodo active" data-periodo="semana">Semanal (7 dias)</button>
+        <button class="notif-filter-btn hist-periodo" data-periodo="mes">Mensal (30 dias)</button>
+      </div>
+      <div id="histContent"><div class="temp-chart-empty">Carregando...</div></div>
+    </div>
+
+    <!-- VIEW: PLANTAS DO CAMPUS -->
+    <div class="view" id="viewPlantas">
+      <div class="view-header">
+        <div>
+          <h2 class="view-title">Plantas do campus</h2>
+          <p class="view-sub">Cada bolinha é uma sala: <b class="txt-verde">verde</b> = tudo online e sem problemas · <b class="txt-vermelho">vermelha</b> = com problemas ou algum offline · <b class="txt-cinza">cinza</b> = offline / sem agente. O número é o total de computadores da sala.</p>
+        </div>
+        <div class="planta-header-actions">
+          <button class="btn-row-action" id="plantaTema" type="button" title="Alternar fundo da planta">Fundo claro</button>
+          <?php if ($isAdmin): ?>
+          <button class="btn-row-action" id="plantaEditToggle" type="button">✎ Editar bolinhas</button>
+          <?php endif; ?>
+        </div>
+      </div>
+
+      <div class="planta-summary" id="plantaSummary"></div>
+      <div class="planta-tabs" id="plantaTabs"></div>
+
+      <div class="planta-layout">
+        <div class="planta-main">
+          <div class="planta-edit-hint hidden" id="plantaEditHint"></div>
+          <div class="planta-stage" id="plantaStage"></div>
+        </div>
+        <aside class="planta-side" id="plantaSide"></aside>
+      </div>
+
+      <div class="planta-livres" id="plantaLivres"></div>
     </div>
 
     <!-- VIEW: CONFIGURAÇÕES -->

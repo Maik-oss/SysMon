@@ -206,3 +206,67 @@ Detalhes completos em `agent/README.md`.
 - MySQL (DBaaS)
 - Python 3.9+ (agente: `wmi`, `mysql-connector-python`)
 - HTML5 + CSS3 + JavaScript Vanilla (frontend inalterado)
+
+## Histórico de problemas
+
+Menu lateral **Histórico**: resumo semanal (7 dias) ou mensal (30 dias) das
+notificações — total de problemas, vermelhos (crítico/offline), computadores
+afetados, tempo em problema, gráfico por dia, ranking por computador, tipos de
+problema e lista das ocorrências. As notificações agora ficam guardadas por
+12 meses (antes eram apagadas após 1 mês).
+
+## Lista de computadores do campus (planilha)
+
+- `banco_de_dados/computadores_ifrn.php` tem os 347 computadores da planilha
+  (patrimônio, sala/local, modelo e situação). `importar_computadores.php`
+  grava tudo no banco (uma vez, logado como administrador): cada PC vira
+  `CM` + patrimônio (ex.: `CM406652`) e aparece em **Listar Computadores**
+  como **Sem agente** até o agente rodar nele.
+- A lista tem filtros por **sala**, **modelo** e **com/sem agente**, e a
+  busca aceita código, patrimônio, sala ou modelo.
+- PCs **sem agente** não geram alerta de offline nem entram nos gráficos de
+  monitoramento; a pizza mostra só os que já enviaram dados.
+- No PC, o `install.bat` pergunta o número de patrimônio e grava em
+  `agent/config.ini` (`patrimonio = 406652`). Com isso o agente se identifica
+  como `CM406652` e o painel mostra sala e modelo da planilha.
+
+
+
+## 🗺️ Plantas do campus (menu **Plantas do campus**)
+
+As plantas dos dois prédios (**Principal** e **Anexo**, térreo, 1º e 2º andar)
+ficam em `static/plantas/` e aparecem com uma **bolinha por sala**:
+
+| Cor | Significa |
+|-----|-----------|
+| 🟢 verde | todos os computadores monitorados da sala estão online e sem problemas |
+| 🔴 vermelha | algum computador com problema (alerta/crítico) **ou** algum offline |
+| ⚪ cinza | nenhum computador online (tudo offline ou ainda sem agente) |
+
+O número dentro da bolinha é o total de computadores da sala. Clicando nela
+(ou na lista ao lado) aparecem: total, **sem problemas**, **com problemas**,
+**offline**, **sem agente** e o código de cada PC — clicar no código abre o
+detalhe do computador (o botão *Voltar* retorna à planta). Tudo é calculado ao
+vivo com a mesma regra do Monitoramento Geral e atualiza no intervalo definido
+em Configurações.
+
+### Posicionando as bolinhas (administradores)
+As plantas são só desenho (sem nome de sala), então cada bolinha precisa ser
+ligada uma vez à sala do cadastro:
+
+1. Abra a planta e clique em **✎ Editar bolinhas**.
+2. Clique no ponto da planta onde fica a sala → marque a(s) sala(s) da lista
+   (use o filtro) → **Salvar**. Marque mais de uma sala quando a planilha usa
+   nomes diferentes para o mesmo lugar (ex.: `LAB. GAMES` e `LAB. JOGOS`).
+3. Arraste uma bolinha para mudar a posição; clique nela para editar ou excluir.
+4. Em **Salas ainda sem bolinha** (rodapé) aparece o que falta posicionar;
+   clique no nome da sala e depois no ponto da planta.
+
+Uma sala só pode estar em uma bolinha. Usuários comuns só visualizam.
+
+### Detalhes
+- Tabelas `planta_marcadores` e `planta_marcador_salas`: criadas sozinhas na
+  primeira requisição (`ensure_schema`) e também em `schema.sql`.
+- Para renomear andares ou trocar o arquivo de uma planta, edite `PLANTAS` em
+  `includes/plantas.php`.
+- A regra das cores está em `plantas_cor()` (`includes/plantas.php`).

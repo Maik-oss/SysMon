@@ -17,7 +17,7 @@ setlocal
 cd /d "%~dp0"
 
 echo.
-echo [1/3] Instalando dependencias Python...
+echo [1/4] Instalando dependencias Python...
 python -m pip install -r requirements.txt
 if errorlevel 1 (
     echo.
@@ -29,7 +29,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/3] Localizando o interpretador Python...
+echo [2/4] Localizando o interpretador Python...
 set "PYW="
 for /f "delims=" %%P in ('where pythonw 2^>nul') do (
     if not defined PYW set "PYW=%%P"
@@ -43,7 +43,11 @@ if not defined PYW (
 echo Encontrado: %PYW%
 
 echo.
-echo [3/3] Registrando tarefa agendada "SysMonAgent"...
+echo [3/4] Identificando este computador...
+python "%~dp0collector.py" --configurar
+
+echo.
+echo [4/4] Registrando tarefa agendada "SysMonAgent"...
 schtasks /create /tn "SysMonAgent" /tr "\"%PYW%\" \"%~dp0collector.py\"" /sc onstart /rl highest /f
 
 if errorlevel 1 (
