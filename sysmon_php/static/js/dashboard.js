@@ -170,17 +170,6 @@ if (navBtns.users) {
 computerSearch.addEventListener("input", renderComputerList);
 computerSearch.addEventListener("keydown", e => { if (e.key === "Escape") { computerSearch.value = ""; renderComputerList(); } });
 
-// Load computers
-async function loadComputers(query = "") {
-  computerGrid.innerHTML = "";
-  emptyState.classList.add("hidden");
-  try {
-    const list = await fetch(API.search(query)).then(r => r.json());
-    if (!list.length) { emptyState.classList.remove("hidden"); return; }
-    list.forEach((comp, i) => computerGrid.appendChild(makeComputerCard(comp, i)));
-  } catch (e) { console.error(e); }
-}
-
 // "Sem agente": cadastrado pela planilha, mas o agente ainda não rodou nele.
 function statusInfo(comp) {
   if (comp.sem_agente) return { cls: "pendente", label: "Sem agente" };
@@ -274,27 +263,6 @@ $("filterClear").addEventListener("click", () => {
   ["filterSala", "filterModelo", "filterAgente"].forEach(id => { $(id).value = ""; });
   renderComputerList();
 });
-
-function makeComputerCard(comp, i) {
-  const statusLabel = { online:"Online", warning:"Alerta", offline:"Offline" };
-  const card = document.createElement("div");
-  card.className = `computer-card ${comp.status === "warning" ? "warn" : comp.status === "offline" ? "off" : ""}`;
-  card.style.animationDelay = `${i * 0.05}s`;
-  card.innerHTML = `
-    <div class="card-top">
-      <span class="computer-code">${comp.code}</span>
-      <span class="status-badge ${comp.status}"><span class="status-dot ${comp.status}"></span>${statusLabel[comp.status]}</span>
-    </div>
-    <div class="computer-label">${comp.label}</div>
-    <div class="computer-loc">
-      <svg width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2a6 6 0 016 6c0 5-6 12-6 12S4 13 4 8a6 6 0 016-6z"/><circle cx="10" cy="8" r="2"/></svg>
-      ${comp.location}
-    </div>`;
-  // Sempre clicável — mesmo offline, precisa poder abrir pra ver
-  // detalhes e remover o computador do painel se for o caso.
-  card.addEventListener("click", () => openComputer(comp));
-  return card;
-}
 
 // Open computer detail
 async function openComputer(comp) {
@@ -925,7 +893,7 @@ async function loadAlerts() {
   alertsEmpty().classList.add("hidden");
   try {
     const list = await fetchJSON(API.search(""));
-    const alerts = list.filter(c => c.status !== "online");
+    const alerts = list.filter(c => c.status !== "online" && !c.sem_agente);
     if (!alerts.length) { alertsEmpty().classList.remove("hidden"); }
     else { alerts.forEach((comp, i) => alertsGrid().appendChild(makeAlertCard(comp, i))); }
   } catch (e) { console.error(e); }
@@ -984,7 +952,7 @@ function makeAlertCard(comp, i) {
 async function updateAlertBadge() {
   try {
     const list = await fetchJSON(API.search(""));
-    const n = list.filter(c => c.status !== "online").length;
+    const n = list.filter(c => c.status !== "online" && !c.sem_agente).length;
     $("alertBadge").textContent = n;
   } catch (e) {}
 }

@@ -3,7 +3,7 @@ REM ============================================================
 REM Instalador do agente SysMon.
 REM
 REM O que este script faz:
-REM   1) Instala as dependencias Python (wmi, pywin32, mysql-connector)
+REM   1) Instala as dependencias Python (wmi, pywin32)
 REM   2) Cria uma Tarefa Agendada no Windows para iniciar o agente
 REM      sozinho, toda vez que o computador ligar - sem precisar
 REM      abrir nada manualmente depois disso.
@@ -17,7 +17,7 @@ setlocal
 cd /d "%~dp0"
 
 echo.
-echo [1/4] Instalando dependencias Python...
+echo [1/5] Instalando dependencias Python...
 python -m pip install -r requirements.txt
 if errorlevel 1 (
     echo.
@@ -29,7 +29,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/4] Localizando o interpretador Python...
+echo [2/5] Localizando o interpretador Python...
 set "PYW="
 for /f "delims=" %%P in ('where pythonw 2^>nul') do (
     if not defined PYW set "PYW=%%P"
@@ -43,11 +43,11 @@ if not defined PYW (
 echo Encontrado: %PYW%
 
 echo.
-echo [3/4] Identificando este computador...
+echo [3/5] Identificando este computador...
 python "%~dp0collector.py" --configurar
 
 echo.
-echo [4/4] Registrando tarefa agendada "SysMonAgent"...
+echo [4/5] Registrando tarefa agendada "SysMonAgent"...
 schtasks /create /tn "SysMonAgent" /tr "\"%PYW%\" \"%~dp0collector.py\"" /sc onstart /rl highest /f
 
 if errorlevel 1 (
@@ -63,6 +63,18 @@ if errorlevel 1 (
     echo     schtasks /run /tn "SysMonAgent"
     echo Para conferir se esta rodando, abra o Gerenciador de Tarefas
     echo e procure por "pythonw.exe", ou veja o dashboard no navegador.
+)
+
+echo.
+echo [5/5] Testando a comunicacao com o painel...
+python "%~dp0collector.py" --uma-vez
+if errorlevel 1 (
+    echo.
+    echo O teste FALHOU. Leia a mensagem acima: ela diz se o problema e a
+    echo conexao com o painel, a chave do config.ini ou a coleta no Windows.
+) else (
+    echo.
+    echo Comunicacao com o painel OK.
 )
 
 echo.

@@ -1,14 +1,15 @@
 # 🖥️ SysMon — Network Operations Center (PHP + MySQL + Agente WMI)
 
 Sistema de monitoramento de computadores com interface NOC. O site em
-PHP **não simula mais nada**: ele só lê dados reais, gravados no MySQL
-por um agente Python que roda em cada máquina monitorada e coleta
-hardware real via WMI (Windows Management Instrumentation).
+PHP **não simula mais nada**: ele só lê dados reais, enviados por um
+agente Python que roda em cada máquina monitorada e coleta hardware real
+via WMI (Windows Management Instrumentation). O agente envia os dados ao
+site por **HTTPS** (`api/agent_ingest.php`); só o PHP grava no MySQL.
 
 ```
 ┌────────────────┐        grava métricas         ┌───────────────┐
-│ agente Python   │ ───────────────────────────▶ │  MySQL         │
-│ (roda no PC     │        a cada 15s (padrão)    │  piprojeto2    │
+│ agente Python   │ ── HTTPS (porta 443) ──────▶ │ api/agent_ingest│
+│ (roda no PC     │   a cada 15s, com chave      │ (PHP) → MySQL  │
 │  monitorado,    │                                │                │
 │  lê via WMI)     │                                └───────┬───────┘
 └────────────────┘                                          │ lê últimas linhas
@@ -49,7 +50,7 @@ sysmon_php/
 │   ├── schema.sql             # Cria as tabelas no banco piprojeto2
 │   └── criar_admin.php        # Roda 1x para criar o usuário do painel
 ├── agent/
-│   ├── collector.py           # Agente: lê hardware via WMI, grava no MySQL
+│   ├── collector.py           # Agente: lê hardware via WMI, envia ao painel por HTTPS
 │   ├── config.ini             # Configuração por máquina monitorada
 │   ├── requirements.txt
 │   └── README.md              # Como instalar/rodar o agente
@@ -204,7 +205,7 @@ Detalhes completos em `agent/README.md`.
 
 - PHP 8.1+ (PDO, sessões nativas, password_hash/password_verify)
 - MySQL (DBaaS)
-- Python 3.9+ (agente: `wmi`, `mysql-connector-python`)
+- Python 3.9+ (agente: `wmi`, `pywin32`; só usa a biblioteca padrão para HTTPS)
 - HTML5 + CSS3 + JavaScript Vanilla (frontend inalterado)
 
 ## Histórico de problemas
@@ -270,3 +271,15 @@ Uma sala só pode estar em uma bolinha. Usuários comuns só visualizam.
 - Para renomear andares ou trocar o arquivo de uma planta, edite `PLANTAS` em
   `includes/plantas.php`.
 - A regra das cores está em `plantas_cor()` (`includes/plantas.php`).
+
+## Envio dos dados do agente por HTTPS
+
+- O agente faz `POST` em `api/agent_ingest.php` com o cabeçalho
+  `X-SysMon-Key`. A chave fica em `includes/agent_config.php` (servidor) e
+  em `agent/config.ini` (linha `chave`); precisam ser iguais.
+- A chave só permite **enviar** leituras; não dá acesso ao banco nem ao
+  painel. Para trocar, gere outra, atualize os dois lugares e reinstale o
+  `config.ini` nos computadores.
+- Se o servidor estiver sem chave, o endpoint responde 503 (não aceita dados).
+- Os computadores **não têm mais a senha do banco**.
+

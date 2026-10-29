@@ -1,9 +1,15 @@
 # Agente coletor SysMon (Windows)
 
 Este agente roda em **cada computador Windows** que você quer ver no
-painel. Ele lê CPU/RAM/disco/rede/GPU/uptime via **WMI** e grava
-direto no MySQL (`piprojeto2`) usado pelo site. O site não simula
-mais nada — só mostra o que o agente gravou.
+painel. Ele lê CPU/RAM/disco/rede/GPU/uptime via **WMI** e **envia ao
+painel por HTTPS** (`api/agent_ingest.php`, porta 443, a mesma do site).
+Só o servidor do painel grava no MySQL: o agente **não acessa o banco** e
+o computador **não guarda a senha do banco**. O site não simula mais
+nada — só mostra o que o agente enviou.
+
+> Antes, o agente gravava direto no MySQL (porta 3306). Redes como a do
+> campus bloqueiam essa porta (erro `2003: Can't connect to MySQL server …
+> timed out`); a 443 passa, porque é a mesma que abre o painel.
 
 ## Modo rápido (recomendado) — `install.bat`
 
@@ -51,12 +57,9 @@ codigo = CM000002          ; único por máquina!
 label = Workstation RH
 location = Sala 2
 
-[banco]
-host = piprojeto2.mysql.dbaas.com.br
-port = 3306
-database = piprojeto2
-user = piprojeto2
-password = Ifrn@c0p42k6##
+[servidor]
+url = https://projeto2tecnolog2.websiteseguro.com/api/agent_ingest.php
+chave = (a mesma chave de includes/agent_config.php no servidor)
 
 [coleta]
 intervalo_segundos = 15
@@ -123,3 +126,13 @@ continuamente enquanto a tarefa estiver ativa.
 - **Potência da fonte (PSU)**: não existe sensor padrão de watts no
   WMI de PCs comuns — fica sempre `NULL`, a menos que você depois
   integre outra fonte de dados específica da sua placa-mãe/fonte.
+
+## Testar a comunicação com o painel
+
+```bat
+python collector.py --uma-vez
+```
+Faz uma única coleta, envia ao painel e mostra o resultado (`OK` ou o
+motivo da falha: sem conexão, chave diferente da do servidor, etc.). O
+`install.bat` já roda esse teste no final.
+

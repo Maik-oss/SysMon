@@ -90,6 +90,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -101,15 +102,6 @@ except ImportError:
         "O módulo 'wmi' não está instalado (ou este script não está "
         "rodando no Windows). Rode: pip install -r requirements.txt"
     )
-
-try:
-    import mysql.connector
-except ImportError:
-    sys.exit(
-        "O módulo 'mysql-connector-python' não está instalado. "
-        "Rode: pip install -r requirements.txt"
-    )
-
 
 # ─────────────────────────── Configuração ───────────────────────────
 
@@ -633,96 +625,77 @@ class ColetorWMI:
 
 # ─────────────────────────── Gravação no MySQL ───────────────────────
 
-def conectar_mysql(cfg: configparser.ConfigParser):
-    return mysql.connector.connect(
-        host=cfg.get("banco", "host"),
-        port=cfg.getint("banco", "port", fallback=3306),
-        user=cfg.get("banco", "user"),
-        password=cfg.get("banco", "password"),
-        database=cfg.get("banco", "database"),
-        autocommit=True,
-        connection_timeout=10,
+class ErroEnvio(Exception):
+    """Falha ao entregar os dados ao painel (rede, chave ou servidor)."""
+
+
+def enviar_ao_painel(cfg: configparser.ConfigParser, payload: dict) -> None:
+    """Envia a leitura ao painel por HTTPS (porta 443). O agente não fala
+    mais com o MySQL: só o servidor do painel grava no banco."""
+    url = cfg.get("servidor", "url", fallback="").strip()
+    chave = cfg.get("servidor", "chave", fallback="").strip()
+    if not url or not chave:
+        raise ErroEnvio("config.ini sem [servidor] url/chave — use o config.ini novo do agente")
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "X-SysMon-Key": chave,
+            "User-Agent": "sysmon-agent/3.0",
+        },
     )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            corpo = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read().decode("utf-8", "replace")).get("error", "")
+        except Exception:
+            msg = ""
+        dica = " (chave diferente da do servidor?)" if e.code == 401 else ""
+        raise ErroEnvio(f"o painel respondeu HTTP {e.code}: {msg or e.reason}{dica}")
+    except urllib.error.URLError as e:
+        raise ErroEnvio(f"sem conexão com o painel: {e.reason}")
+    except OSError as e:
+        raise ErroEnvio(f"sem conexão com o painel: {e}")
+    try:
+        ok = json.loads(corpo).get("ok") is True
+    except ValueError:
+        ok = False
+    if not ok:
+        raise ErroEnvio(f"resposta inesperada do painel: {corpo[:200]}")
 
 
-def garantir_computador(conn, codigo: str, label: str, location: str, mobo: dict) -> None:
-    """Cadastra o PC (se novo) ou atualiza. Se o PC veio da planilha do
-    campus (tem patrimônio), mantém o nome/sala já cadastrados no painel."""
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT COUNT(*) FROM information_schema.COLUMNS "
-        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'computadores' AND COLUMN_NAME = 'patrimonio'"
-    )
-    tem_planilha = cursor.fetchone()[0] > 0   # coluna criada pelo painel/importação
-    manter_label = "IF(patrimonio IS NOT NULL, label, VALUES(label))" if tem_planilha else "VALUES(label)"
-    cursor.execute(
-        f"""
-        INSERT INTO computadores (codigo, label, location, mobo_manufacturer, mobo_model, bios_version)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON DUPLICATE KEY UPDATE
-            label = {manter_label},
-            location = IF(VALUES(location) = '', location, VALUES(location)),
-            mobo_manufacturer = VALUES(mobo_manufacturer),
-            mobo_model = VALUES(mobo_model),
-            bios_version = VALUES(bios_version)
-        """,
-        (codigo, label, location, mobo["manufacturer"], mobo["model"], mobo["bios"]),
-    )
-    cursor.close()
+def coletar_e_enviar(cfg, coletor, codigo: str, label: str, location: str) -> str:
+    coletor.resetar_cache_lhm()
+    mobo = coletor.placa_mae()
+    cpu = coletor.cpu()
+    gpu = coletor.gpu()
+    ram = coletor.ram()
+    disco = coletor.disco()
+    rede = coletor.rede()
+    uptime_h = coletor.uptime_horas()
+    temps = coletor.temperaturas()
 
-
-def gravar_metrica(conn, codigo: str, cpu: dict, gpu: dict, ram: dict,
-                    disco: dict, rede: dict, uptime_h: int) -> None:
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO metricas (
-            codigo, cpu_usage, cpu_temp, cpu_model, cpu_freq, cpu_cores,
-            gpu_usage, gpu_temp, gpu_vram_pct, gpu_model,
-            ram_used, ram_total, disk_used, disk_total,
-            psu_watts, psu_max, psu_temp, net_down, net_up, uptime_h
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s,
-            %s, %s, %s, %s,
-            %s, %s, %s, %s, %s, %s
-        )
-        """,
-        (
-            codigo,
-            cpu["usage"], None, cpu["model"], cpu["freq"], json.dumps(cpu["cores"]),
-            gpu["usage"], gpu["temp"], gpu["vram_pct"], gpu["model"],
-            ram["used"], ram["total"], disco["used"], disco["total"],
-            None, None, None,  # PSU: sem fonte confiável via WMI padrão
-            rede["down"], rede["up"], uptime_h,
-        ),
-    )
-    cursor.close()
-
-
-def gravar_temperatura(conn, codigo: str, t: dict) -> None:
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO temperaturas (
-            codigo, cpu_package, cpu_cores, gpu_die, gpu_mem,
-            nvme_1, nvme_2, psu, motherboard, ambient,
-            fan_cpu_rpm, fan_sys_rpm
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """,
-        (
-            codigo, t["cpu_package"], json.dumps(t["cpu_cores"]), t["gpu_die"],
-            t["gpu_mem"], t["nvme_1"], t["nvme_2"], t["psu"], t["motherboard"],
-            t["ambient"], t["fan_cpu_rpm"], t["fan_sys_rpm"],
-        ),
-    )
-    cursor.close()
+    enviar_ao_painel(cfg, {
+        "codigo": codigo,
+        "label": label,
+        "location": location,
+        "mobo": mobo,
+        "metrica": {"cpu": cpu, "gpu": gpu, "ram": ram, "disco": disco,
+                    "rede": rede, "uptime_h": uptime_h},
+        "temperaturas": temps,
+    })
+    return (f"cpu={cpu['usage']}% ram={ram['used']}/{ram['total']}GB "
+            f"disco={disco['used']}/{disco['total']}GB")
 
 
 # ─────────────────────────── Loop principal ──────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Agente coletor SysMon (WMI -> MySQL)")
+    parser = argparse.ArgumentParser(description="Agente coletor SysMon (WMI -> painel por HTTPS)")
     parser.add_argument(
         "--config",
         default=str(Path(__file__).with_name("config.ini")),
@@ -732,6 +705,11 @@ def main():
         "--configurar",
         action="store_true",
         help="Pergunta o número de patrimônio e grava no config.ini",
+    )
+    parser.add_argument(
+        "--uma-vez",
+        action="store_true",
+        help="Faz uma única coleta, envia ao painel, mostra o resultado e sai (teste)",
     )
     args = parser.parse_args()
 
@@ -745,37 +723,28 @@ def main():
 
     coletor = ColetorWMI()
 
+    if args.uma_vez:
+        print(f"[sysmon-agent] Teste: coletando '{codigo}' e enviando ao painel...")
+        try:
+            resumo = coletar_e_enviar(cfg, coletor, codigo, label, location)
+        except ErroEnvio as e:
+            print(f"[sysmon-agent] FALHOU: {e}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"[sysmon-agent] FALHOU na coleta: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"[sysmon-agent] OK — o painel recebeu os dados de '{codigo}' ({resumo}).")
+        return
+
     print(f"[sysmon-agent] Iniciando coleta para '{codigo}' a cada {intervalo}s. Ctrl+C para parar.")
 
     while True:
         inicio = time.time()
         try:
-            conn = conectar_mysql(cfg)
-            try:
-                coletor.resetar_cache_lhm()
-                mobo = coletor.placa_mae()
-                garantir_computador(conn, codigo, label, location, mobo)
-
-                cpu = coletor.cpu()
-                gpu = coletor.gpu()
-                ram = coletor.ram()
-                disco = coletor.disco()
-                rede = coletor.rede()
-                uptime_h = coletor.uptime_horas()
-                temps = coletor.temperaturas()
-
-                gravar_metrica(conn, codigo, cpu, gpu, ram, disco, rede, uptime_h)
-                gravar_temperatura(conn, codigo, temps)
-
-                print(
-                    f"[sysmon-agent] {datetime.now():%H:%M:%S} OK "
-                    f"cpu={cpu['usage']}% ram={ram['used']}/{ram['total']}GB "
-                    f"disco={disco['used']}/{disco['total']}GB"
-                )
-            finally:
-                conn.close()
-        except mysql.connector.Error as e:
-            print(f"[sysmon-agent] ERRO de banco de dados: {e}", file=sys.stderr)
+            resumo = coletar_e_enviar(cfg, coletor, codigo, label, location)
+            print(f"[sysmon-agent] {datetime.now():%H:%M:%S} OK {resumo}")
+        except ErroEnvio as e:
+            print(f"[sysmon-agent] ERRO ao enviar ao painel: {e}", file=sys.stderr)
         except Exception as e:
             print(f"[sysmon-agent] ERRO na coleta: {e}", file=sys.stderr)
 
