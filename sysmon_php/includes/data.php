@@ -1,22 +1,13 @@
 <?php
 require_once __DIR__ . '/db.php';
 
-// ── Regras de status (ao vivo, calculado pela última métrica recebida) ──
-// Se o agente não envia dados há mais tempo que isso, o computador entra
-// em "warning"; depois disso, em "offline".
 define('STATUS_ONLINE_SECONDS', 20);
 define('STATUS_WARNING_SECONDS', 90);
 
-// Limite (%) ou °C a partir do qual uma barra fica vermelha e vira
-// notificação. Mesmo valor usado no front-end (static/js/dashboard.js),
-// então se mudar um, mude o outro também.
 define('ALERT_THRESHOLD', 85.0);
 
-// A partir de quantos problemas críticos ativos ao mesmo tempo o painel
-// mostra o banner de alerta "muitos problemas" na aba Alertas.
 define('MANY_PROBLEMS_THRESHOLD', 3);
 
-// ── Helpers de resposta ────────────────────────
 function json_response($data, int $status = 200) {
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
@@ -31,22 +22,14 @@ function require_auth(): void {
     }
 }
 
-// Nomes dos usuários que podem cadastrar/gerenciar acessos de outras
-// pessoas. Centralizado aqui para não espalhar essas strings pelos
-// arquivos de API — para adicionar/remover um admin, mexe só aqui.
 const ADMIN_USERNAMES = ['maikson', 'matheus', 'samuel', 'pedrosa'];
 
-// E-mails já cadastrados dos administradores (usados nas notificações por
-// e-mail). São gravados na coluna usuarios.email automaticamente — só
-// preenche quando o campo ainda está vazio, então se o admin trocar o
-// próprio e-mail em Configurações, a troca dele é respeitada.
 const ADMIN_DEFAULT_EMAILS = [
     'maikson' => 'maikson.santiago@escolar.ifrn.edu.br',
     'samuel'  => 'samuel.pedrosa@escolar.ifrn.edu.br',
     'matheus' => 'm.gessle@escolar.ifrn.edu.br',
 ];
 
-// Tipos de manutenção aceitos (chave gravada no banco => rótulo exibido).
 const MAINTENANCE_TYPES = [
     'preventiva' => 'Preventiva',
     'corretiva'  => 'Corretiva',
@@ -56,7 +39,6 @@ const MAINTENANCE_TYPES = [
     'outro'      => 'Outro',
 ];
 
-/** true se o nome de usuário passado (não necessariamente o logado) é admin. */
 function is_admin_username(string $usuario): bool {
     foreach (ADMIN_USERNAMES as $nome) {
         if (strcasecmp($usuario, $nome) === 0) {
@@ -66,41 +48,26 @@ function is_admin_username(string $usuario): bool {
     return false;
 }
 
-/** true se o usuário atualmente logado na sessão é admin. */
 function is_admin(): bool {
     return isset($_SESSION['user']) && is_admin_username($_SESSION['user']);
 }
 
-/** Chamar sempre depois de require_auth() nos endpoints restritos ao admin. */
 function require_admin(): void {
     if (!is_admin()) {
         json_response(['error' => 'Acesso restrito.'], 403);
     }
 }
 
-/**
- * Gera "?v=123456" a partir da data de modificação do arquivo, para
- * forçar o navegador a buscar a versão nova de um .css/.js sempre que
- * ele for alterado no servidor — em vez de continuar usando uma cópia
- * antiga guardada em cache.
- */
 function asset_v(string $relativePath): string {
     $full = __DIR__ . '/../' . $relativePath;
     $v = @filemtime($full);
     return $relativePath . '?v=' . ($v !== false ? $v : time());
 }
 
-/**
- * Dados de cadastro vindos da planilha do campus (patrimônio, sala, modelo,
- * situação) + "sem_agente": true quando o computador está cadastrado mas
- * nunca enviou dados (o agente ainda não foi instalado nele). Esses PCs
- * não geram alerta de offline nem entram nos gráficos de monitoramento.
- */
 function computer_cadastro(array $r): array {
     $pat = trim((string) ($r['patrimonio'] ?? ''));
-    if ($pat === '' && preg_match('/^CM(\d{6})$/', (string) $r['codigo'], $m)) {
-        $pat = $m[1];   // código CM + patrimônio
-    }
+    if ($pat === '' && preg_match('/^CM(?=[0-9A-Z]*[0-9])([0-9A-Z]{3,10})$/', strtoupper((string) $r['codigo']), $m)) {
+        $pat = $m[1];       }
     $sala = trim((string) ($r['sala'] ?? ''));
     $loc  = $sala !== '' ? $sala : trim((string) ($r['location'] ?? ''));
     $modelo   = trim((string) ($r['modelo'] ?? ''));
@@ -112,10 +79,12 @@ function computer_cadastro(array $r): array {
         'modelo'     => $modelo !== '' ? $modelo : null,
         'situacao'   => $situacao !== '' ? $situacao : null,
         'sem_agente' => $r['last_seen'] === null,
+                'pausada'     => (int) ($r['coleta_pausada'] ?? 0) === 1,
+        'pausada_em'  => $r['pausada_em'] ?? null,
+        'pausada_por' => $r['pausada_por'] ?? null,
     ];
 }
 
-// ── Cálculo de status a partir do timestamp da última métrica ─────────
 function compute_status(?string $lastSeen): string {
     if ($lastSeen === null) {
         return 'offline';
@@ -130,12 +99,9 @@ function compute_status(?string $lastSeen): string {
     return 'offline';
 }
 
-// ── Acesso a dados (substitui os antigos arrays COMPUTERS/USERS) ──────
-
-/** Lista todos os computadores cadastrados, com status calculado ao vivo. */
 function fetch_computers(): array {
     $pdo = get_pdo();
-    $sql = "SELECT c.codigo, c.label, c.location, c.patrimonio, c.sala, c.modelo, c.situacao,
+    $sql = "SELECT c.codigo, c.label, c.location, c.patrimonio, c.sala, c.modelo, c.situacao, c.coleta_pausada, c.pausada_em, c.pausada_por,
                    c.mobo_manufacturer, c.mobo_model, c.bios_version,
                    m.ultimo_visto AS last_seen
             FROM computadores c
@@ -160,11 +126,10 @@ function fetch_computers(): array {
     return $out;
 }
 
-/** Busca um único computador pelo código. Retorna null se não existir. */
 function fetch_computer(string $code): ?array {
     $pdo = get_pdo();
     $stmt = $pdo->prepare(
-        "SELECT c.codigo, c.label, c.location, c.patrimonio, c.sala, c.modelo, c.situacao,
+        "SELECT c.codigo, c.label, c.location, c.patrimonio, c.sala, c.modelo, c.situacao, c.coleta_pausada, c.pausada_em, c.pausada_por,
                 c.mobo_manufacturer, c.mobo_model, c.bios_version,
                 (SELECT MAX(criado_em) FROM metricas WHERE codigo = c.codigo) AS last_seen
          FROM computadores c
@@ -185,7 +150,6 @@ function fetch_computer(string $code): ?array {
     ] + computer_cadastro($r);
 }
 
-/** Última linha de métricas (CPU/RAM/disco/GPU/rede/uptime) enviada pelo agente. */
 function fetch_latest_metric(string $code): ?array {
     $pdo = get_pdo();
     $stmt = $pdo->prepare(
@@ -196,7 +160,6 @@ function fetch_latest_metric(string $code): ?array {
     return $row ?: null;
 }
 
-/** Última linha de temperaturas enviada pelo agente. */
 function fetch_latest_temperature(string $code): ?array {
     $pdo = get_pdo();
     $stmt = $pdo->prepare(
@@ -207,8 +170,6 @@ function fetch_latest_temperature(string $code): ?array {
     return $row ?: null;
 }
 
-/** Lista os usuários cadastrados pelos admins (todos, exceto os próprios
- * admins — que gerenciam a conta deles na tela "Conta", não aqui). */
 function fetch_managed_users(): array {
     $pdo = get_pdo();
     $placeholders = implode(',', array_fill(0, count(ADMIN_USERNAMES), '?'));
@@ -222,11 +183,6 @@ function fetch_managed_users(): array {
     return $stmt->fetchAll();
 }
 
-// ══════════════════════════════════════════════════════════════════
-// Notificações / histórico de problemas
-// ══════════════════════════════════════════════════════════════════
-
-/** Nome amigável de cada métrica, pra montar a mensagem do evento. */
 function metric_label(string $chave): string {
     $labels = [
         'status'      => 'Status da máquina',
@@ -246,7 +202,6 @@ function metric_label(string $chave): string {
     return $labels[$chave] ?? $chave;
 }
 
-/** Insere um evento novo (problema começando). */
 function open_event(string $codigo, string $tipo, string $chave, string $nivel, ?float $valor, string $mensagem): void {
     $pdo = get_pdo();
     $stmt = $pdo->prepare(
@@ -255,16 +210,13 @@ function open_event(string $codigo, string $tipo, string $chave, string $nivel, 
     );
     $stmt->execute([$codigo, $tipo, $chave, $nivel, $valor, $mensagem]);
 
-    // Guarda para enviar por e-mail no fim da conferência (um único e-mail
-    // agrupado por pessoa, em vez de um e-mail por problema).
-    queue_alert_email([
+            queue_alert_email([
         'codigo'   => $codigo,
         'nivel'    => $nivel,
         'mensagem' => $mensagem,
     ]);
 }
 
-/** Marca o(s) evento(s) ativo(s) daquela chave como resolvido(s). */
 function resolve_events(string $codigo, string $chave): void {
     $pdo = get_pdo();
     $stmt = $pdo->prepare(
@@ -274,7 +226,6 @@ function resolve_events(string $codigo, string $chave): void {
     $stmt->execute([$codigo, $chave]);
 }
 
-/** true se já existe um evento ativo (não resolvido) pra essa chave. */
 function has_active_event(string $codigo, string $chave): bool {
     $pdo = get_pdo();
     $stmt = $pdo->prepare(
@@ -284,20 +235,13 @@ function has_active_event(string $codigo, string $chave): bool {
     return (bool) $stmt->fetch();
 }
 
-/**
- * Confere o estado atual (status + métricas + temperaturas) de todos os
- * computadores e abre/fecha eventos de acordo. Chamado a cada
- * carregamento do painel (api/computers.php e api/notifications.php),
- * então funciona mesmo sem cron — desde que alguém tenha o painel
- * aberto (ou o polling automático rodando) de tempos em tempos.
- */
 function sync_alert_events(): void {
     $pdo = get_pdo();
 
     cleanup_old_events();
 
     $computers = $pdo->query(
-        "SELECT c.codigo, c.label, c.last_status,
+        "SELECT c.codigo, c.label, c.last_status, c.coleta_pausada,
                 (SELECT MAX(criado_em) FROM metricas WHERE codigo = c.codigo) AS last_seen
          FROM computadores c"
     )->fetchAll();
@@ -305,17 +249,22 @@ function sync_alert_events(): void {
     foreach ($computers as $c) {
         $codigo = $c['codigo'];
 
-        // Cadastrado pela planilha, mas o agente nunca rodou nele: não há o
-        // que monitorar. Sem este "continue" cada um viraria um alerta de
-        // "ficou offline" (e um e-mail) assim que o painel fosse aberto.
-        if ($c['last_seen'] === null) {
+                        if ((int) $c['coleta_pausada'] === 1) {
+            $pdo->prepare('UPDATE eventos SET ativo = 0, resolvido_em = NOW() WHERE codigo = ? AND ativo = 1')
+                ->execute([$codigo]);
+            if ($c['last_status'] !== 'pausado') {
+                $pdo->prepare('UPDATE computadores SET last_status = ? WHERE codigo = ?')->execute(['pausado', $codigo]);
+            }
+            continue;
+        }
+
+                                if ($c['last_seen'] === null) {
             continue;
         }
 
         $status = compute_status($c['last_seen']);
 
-        // ── Transição de status (online → warning/offline → online) ──
-        if ($status !== $c['last_status']) {
+                if ($status !== $c['last_status']) {
             if ($status !== 'online') {
                 $nivel = $status === 'offline' ? 'offline' : 'warning';
                 $msg = $status === 'offline'
@@ -332,12 +281,10 @@ function sync_alert_events(): void {
         }
 
         if ($status === 'offline') {
-            // Máquina offline não tem métrica recente confiável — pula.
-            continue;
+                        continue;
         }
 
-        // ── Métricas (última linha da tabela metricas) ──
-        $m = fetch_latest_metric($codigo);
+                $m = fetch_latest_metric($codigo);
         if ($m) {
             $ramPct  = ((float)$m['ram_total']  > 0) ? round((float)$m['ram_used']  / (float)$m['ram_total']  * 100, 1) : null;
             $diskPct = ((float)$m['disk_total'] > 0) ? round((float)$m['disk_used'] / (float)$m['disk_total'] * 100, 1) : null;
@@ -355,8 +302,7 @@ function sync_alert_events(): void {
             }
         }
 
-        // ── Temperaturas (última linha da tabela temperaturas) ──
-        $t = fetch_latest_temperature($codigo);
+                $t = fetch_latest_temperature($codigo);
         if ($t) {
             $checks = [
                 'cpu_package' => $t['cpu_package'] !== null ? (float)$t['cpu_package'] : null,
@@ -372,16 +318,13 @@ function sync_alert_events(): void {
         }
     }
 
-    // Eventos novos desta conferência → e-mail. Uma falha de envio nunca
-    // pode derrubar o painel, por isso é isolada aqui.
-    try {
+            try {
         flush_alert_emails();
     } catch (Throwable $e) {
         error_log('[sysmon] Falha ao enviar e-mails de alerta: ' . $e->getMessage());
     }
 }
 
-/** Abre ou fecha o evento de uma métrica específica, comparando com ALERT_THRESHOLD. */
 function check_threshold(string $codigo, string $label, string $tipo, string $chave, ?float $valor): void {
     if ($valor === null) {
         return;
@@ -398,7 +341,6 @@ function check_threshold(string $codigo, string $label, string $tipo, string $ch
     }
 }
 
-/** Lista os eventos mais recentes (histórico + notificações), com nome do computador. */
 function fetch_events(int $limit = 100, bool $onlyUnread = false): array {
     $pdo = get_pdo();
     $sql = "SELECT e.*, c.label AS computador_label
@@ -411,13 +353,11 @@ function fetch_events(int $limit = 100, bool $onlyUnread = false): array {
     return $pdo->query($sql)->fetchAll();
 }
 
-/** Quantidade de notificações ainda não vistas. */
 function count_unread_events(): int {
     $pdo = get_pdo();
     return (int) $pdo->query("SELECT COUNT(*) FROM eventos WHERE visualizado = 0")->fetchColumn();
 }
 
-/** Marca uma notificação (ou todas) como visualizada pelo usuário logado. */
 function mark_events_read(?int $id, string $usuario): void {
     $pdo = get_pdo();
     if ($id !== null) {
@@ -435,7 +375,6 @@ function mark_events_read(?int $id, string $usuario): void {
     }
 }
 
-/** Histórico de temperaturas de uma máquina, mais antigo → mais recente, para o gráfico. */
 function fetch_temperature_history(string $codigo, int $limit = 40): array {
     $pdo = get_pdo();
     $stmt = $pdo->prepare(
@@ -451,13 +390,6 @@ function fetch_temperature_history(string $codigo, int $limit = 40): array {
     return array_reverse($stmt->fetchAll());
 }
 
-/**
- * Última temperatura VÁLIDA (CPU package + GPU die) de todo mundo.
- * CPU e GPU são buscadas separadamente, ignorando registros NULL: se o
- * coletor parou ou o LibreHardwareMonitor foi fechado (agente grava NULL),
- * o gráfico continua mostrando o último valor real de quando o PC estava
- * coletando. Quando a coleta volta, o valor passa a ser atualizado sozinho.
- */
 function fetch_all_latest_temperatures(): array {
     $pdo = get_pdo();
     $sql = "SELECT c.codigo, c.label,
@@ -489,10 +421,6 @@ function fetch_all_latest_temperatures(): array {
     return $out;
 }
 
-/**
- * Resumo dos problemas críticos ATIVOS agora (offline + métrica/temp
- * acima do limite) — usado pro banner "muitos problemas" na aba Alertas.
- */
 function fetch_critical_summary(): array {
     $pdo = get_pdo();
     $stmt = $pdo->query(
@@ -517,18 +445,11 @@ function fetch_critical_summary(): array {
     ];
 }
 
-/**
- * Situação geral da frota, para o gráfico de pizza do Monitoramento Geral.
- * Cada computador entra em UMA categoria (da mais grave para a menos):
- *   offline > crítico (alerta vermelho ativo) > alerta (amarelo ativo ou
- *   contato atrasado) > normal.
- */
 function fetch_fleet_summary(): array {
     $pdo   = get_pdo();
     $comps = fetch_computers();
 
-    $ativos = [];   // codigo => ['critical' => bool, 'warning' => bool]
-    $stmt = $pdo->query("SELECT codigo, nivel FROM eventos WHERE ativo = 1");
+    $ativos = [];       $stmt = $pdo->query("SELECT codigo, nivel FROM eventos WHERE ativo = 1");
     foreach ($stmt as $r) {
         if ($r['nivel'] === 'critical') { $ativos[$r['codigo']]['critical'] = true; }
         elseif ($r['nivel'] === 'warning') { $ativos[$r['codigo']]['warning'] = true; }
@@ -542,7 +463,11 @@ function fetch_fleet_summary(): array {
     ];
 
     $semAgente = 0;
+    $pausados  = 0;
     foreach ($comps as $codigo => $info) {
+        if ($info['pausada']) {                  $pausados++;
+            continue;
+        }
         if ($info['sem_agente']) {
             $semAgente++;
             continue;
@@ -560,8 +485,7 @@ function fetch_fleet_summary(): array {
         $cats[$cat]['pcs'][] = $codigo;
     }
 
-    $total = count($comps) - $semAgente;   // só os que já enviaram dados
-    $out = [];
+    $total = count($comps) - $semAgente - $pausados;       $out = [];
     foreach ($cats as $chave => $c) {
         $out[] = [
             'chave'  => $chave,
@@ -574,37 +498,18 @@ function fetch_fleet_summary(): array {
     return [
         'total'        => $total,
         'sem_agente'   => $semAgente,
+        'pausados'     => $pausados,
         'cadastrados'  => count($comps),
         'com_problema' => $total - $cats['normal']['total'],
         'categorias'   => $out,
     ];
 }
 
-/**
- * Limpeza automática: apaga notificações/eventos com mais de 12 meses.
- * Não precisa de cron — roda sozinho sempre que alguém abre o painel
- * (chamado no início de sync_alert_events()). O prazo é longo de
- * propósito: a aba Histórico precisa de pelo menos um mês de dados.
- */
 function cleanup_old_events(): void {
     $pdo = get_pdo();
     $pdo->exec("DELETE FROM eventos WHERE criado_em < DATE_SUB(NOW(), INTERVAL 12 MONTH)");
 }
 
-// ══════════════════════════════════════════════════════════════════
-// Migração automática do banco (colunas/tabelas novas)
-// ══════════════════════════════════════════════════════════════════
-
-/**
- * Garante que o banco tem o que as funções novas precisam (coluna de
- * e-mail dos usuários e tabela de manutenções), mesmo em bancos criados
- * com o schema.sql antigo. Roda uma vez e deixa um marcador na pasta
- * temporária, então não pesa nas requisições seguintes. Chamada por
- * get_pdo() (includes/db.php).
- *
- * Usa information_schema em vez de "ADD COLUMN IF NOT EXISTS" porque o
- * MySQL/Percona 5.7 do provedor não suporta essa sintaxe.
- */
 function ensure_schema(PDO $pdo, string $dbname): void {
     static $done = false;
     if ($done) {
@@ -612,7 +517,7 @@ function ensure_schema(PDO $pdo, string $dbname): void {
     }
     $done = true;
 
-    $marker = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'sysmon_schema_v4_' . md5($dbname . '|' . __DIR__);
+    $marker = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'sysmon_schema_v5_' . md5($dbname . '|' . __DIR__);
     if (@is_file($marker)) {
         return;
     }
@@ -641,6 +546,16 @@ function ensure_schema(PDO $pdo, string $dbname): void {
             }
         }
 
+                if (!$hasCol('computadores', 'coleta_pausada')) {
+            $pdo->exec('ALTER TABLE computadores ADD COLUMN coleta_pausada TINYINT(1) NOT NULL DEFAULT 0');
+        }
+        if (!$hasCol('computadores', 'pausada_em')) {
+            $pdo->exec('ALTER TABLE computadores ADD COLUMN pausada_em DATETIME DEFAULT NULL');
+        }
+        if (!$hasCol('computadores', 'pausada_por')) {
+            $pdo->exec('ALTER TABLE computadores ADD COLUMN pausada_por VARCHAR(50) DEFAULT NULL');
+        }
+
         $pdo->exec(
             'CREATE TABLE IF NOT EXISTS manutencoes (
                 id              BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -657,8 +572,7 @@ function ensure_schema(PDO $pdo, string $dbname): void {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
         );
 
-        // Plantas do campus: bolinhas (marcadores) e as salas ligadas a cada uma.
-        $pdo->exec(
+                $pdo->exec(
             'CREATE TABLE IF NOT EXISTS planta_marcadores (
                 id          INT AUTO_INCREMENT PRIMARY KEY,
                 planta      VARCHAR(40)  NOT NULL,
@@ -683,13 +597,10 @@ function ensure_schema(PDO $pdo, string $dbname): void {
         seed_admin_emails($pdo);
         @file_put_contents($marker, 'ok');
     } catch (Throwable $e) {
-        // Ex.: tabelas ainda não criadas (schema.sql não rodou) ou usuário
-        // do banco sem permissão de ALTER. Tenta de novo na próxima vez.
-        error_log('[sysmon] ensure_schema: ' . $e->getMessage());
+                        error_log('[sysmon] ensure_schema: ' . $e->getMessage());
     }
 }
 
-/** Preenche o e-mail padrão dos admins que ainda estão sem e-mail. */
 function seed_admin_emails(PDO $pdo): void {
     $stmt = $pdo->prepare(
         "UPDATE usuarios SET email = ?
@@ -700,11 +611,6 @@ function seed_admin_emails(PDO $pdo): void {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════
-// E-mail dos usuários + notificação por e-mail
-// ══════════════════════════════════════════════════════════════════
-
-/** Valida e normaliza um e-mail. Retorna null se for inválido. */
 function normalize_email(string $email): ?string {
     $email = trim($email);
     if ($email === '' || strlen($email) > 150) {
@@ -713,7 +619,6 @@ function normalize_email(string $email): ?string {
     return filter_var($email, FILTER_VALIDATE_EMAIL) ? $email : null;
 }
 
-/** Destinatários: usuários ativos, com e-mail e com notificações ligadas. */
 function fetch_email_recipients(): array {
     $pdo = get_pdo();
     seed_admin_emails($pdo);
@@ -724,10 +629,6 @@ function fetch_email_recipients(): array {
     )->fetchAll();
 }
 
-/**
- * Fila de eventos novos da conferência atual. Chamada sem argumentos
- * devolve (e esvazia) a fila; com argumento, adiciona um evento.
- */
 function queue_alert_email(?array $event = null): array {
     static $queue = [];
     if ($event !== null) {
@@ -739,7 +640,6 @@ function queue_alert_email(?array $event = null): array {
     return $out;
 }
 
-/** Envia, para cada destinatário, UM e-mail com todos os eventos novos. */
 function flush_alert_emails(): void {
     $events = queue_alert_email();
     if (!$events) {
@@ -787,11 +687,6 @@ function flush_alert_emails(): void {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════
-// Histórico de manutenção
-// ══════════════════════════════════════════════════════════════════
-
-/** Manutenções de um computador, da mais recente para a mais antiga. */
 function fetch_maintenance(string $codigo, int $limit = 200): array {
     $pdo = get_pdo();
     $stmt = $pdo->prepare(
@@ -805,7 +700,6 @@ function fetch_maintenance(string $codigo, int $limit = 200): array {
     return $stmt->fetchAll();
 }
 
-/** Registra uma manutenção. $realizadoEm no formato "Y-m-d H:i:s". */
 function add_maintenance(string $codigo, string $tipo, string $descricao, string $realizadoEm, string $usuario): int {
     $pdo = get_pdo();
     $stmt = $pdo->prepare(
@@ -816,7 +710,6 @@ function add_maintenance(string $codigo, string $tipo, string $descricao, string
     return (int) $pdo->lastInsertId();
 }
 
-/** Remove um registro de manutenção. true se algo foi apagado. */
 function delete_maintenance(int $id): bool {
     $pdo = get_pdo();
     $stmt = $pdo->prepare('DELETE FROM manutencoes WHERE id = ?');
@@ -824,14 +717,6 @@ function delete_maintenance(int $id): bool {
     return $stmt->rowCount() > 0;
 }
 
-// ══════════════════════════════════════════════════════════════════
-// Histórico de problemas (semanal / mensal) a partir das notificações
-// ══════════════════════════════════════════════════════════════════
-
-/**
- * Resume os problemas (eventos warning/critical/offline) do período.
- *   $periodo: 'semana' = últimos 7 dias | 'mes' = últimos 30 dias
- */
 function fetch_problem_history(string $periodo): array {
     $pdo  = get_pdo();
     $dias = $periodo === 'mes' ? 30 : 7;
@@ -852,8 +737,7 @@ function fetch_problem_history(string $periodo): array {
 
     $hoje = $pdo->query('SELECT CURDATE()')->fetchColumn();
 
-    // Um bloco por dia do período (inclusive dias sem problema).
-    $porDia = [];
+        $porDia = [];
     for ($i = $dias - 1; $i >= 0; $i--) {
         $d = date('Y-m-d', strtotime("{$hoje} -{$i} day"));
         $porDia[$d] = ['dia' => $d, 'total' => 0, 'criticos' => 0];

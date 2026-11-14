@@ -1,27 +1,6 @@
 <?php
-/**
- * Importa a lista de computadores do campus (computadores_ifrn.php, vinda da
- * planilha Lista_de_PCs.pdf) para o painel: patrimônio, sala, modelo e
- * situação. Cada PC vira "CM" + patrimônio (ex.: CM406652) e já aparece na
- * lista, filtrável por sala e modelo, como "Sem agente" até o agente rodar.
- *
- * COMO USAR (uma vez):
- *   1) Suba a pasta banco_de_dados/ atualizada para o servidor.
- *   2) Entre no painel como ADMINISTRADOR e, na mesma janela do navegador,
- *      abra:  https://SEU_SITE/banco_de_dados/importar_computadores.php
- *   3) Leia o resultado na tela. Depois APAGUE este arquivo e o
- *      computadores_ifrn.php do servidor.
- *
- * É seguro rodar de novo: não duplica, só atualiza patrimônio/sala/modelo/
- * situação. (Se você apagou um PC no painel, ele volta ao rodar outra vez.)
- *
- * Computador que o agente já cadastrou com outro código (ex.: pelo nome do
- * Windows): informe abaixo a qual patrimônio ele corresponde.
- */
 $VINCULOS = [
-    // 'CODIGO_JA_CADASTRADO' => 'PATRIMONIO',
-    // exemplo: 'DESKTOP-ABC123' => '406652',
-];
+        ];
 
 require_once __DIR__ . '/../includes/db.php';
 require_once __DIR__ . '/../includes/data.php';
@@ -35,7 +14,6 @@ if (PHP_SAPI !== 'cli') {
 $pdo   = get_pdo();
 $lista = require __DIR__ . '/computadores_ifrn.php';
 
-// Garante as colunas novas mesmo se o painel ainda não as criou sozinho.
 foreach (['patrimonio' => 'VARCHAR(10)', 'sala' => 'VARCHAR(100)',
           'modelo' => 'VARCHAR(150)', 'situacao' => 'VARCHAR(30)'] as $col => $tipo) {
     $st = $pdo->query("SHOW COLUMNS FROM computadores LIKE '{$col}'");
@@ -45,13 +23,11 @@ foreach (['patrimonio' => 'VARCHAR(10)', 'sala' => 'VARCHAR(100)',
     }
 }
 
-// Já cadastrados (pelo agente ou por importação anterior).
 $existentes = [];
 foreach ($pdo->query('SELECT codigo, patrimonio FROM computadores') as $r) {
     $existentes[$r['codigo']] = $r['patrimonio'];
 }
-$porPatrimonio = [];   // patrimônio => código já cadastrado com outro nome
-foreach ($VINCULOS as $codigo => $pat) {
+$porPatrimonio = [];   foreach ($VINCULOS as $codigo => $pat) {
     $porPatrimonio[(string) $pat] = $codigo;
 }
 
@@ -71,8 +47,7 @@ $usados = [];
 $pdo->beginTransaction();
 try {
     foreach ($lista as [$pat, $sala, $modelo, $situacao]) {
-        if (isset($porPatrimonio[$pat])) {          // PC já cadastrado com outro código
-            $codigo = $porPatrimonio[$pat];
+        if (isset($porPatrimonio[$pat])) {                      $codigo = $porPatrimonio[$pat];
             if (!isset($existentes[$codigo])) {
                 echo "AVISO: vínculo {$codigo} → {$pat} ignorado (código não existe no painel).\n";
                 continue;
@@ -102,7 +77,6 @@ echo "  Novos cadastrados:            {$novos}\n";
 echo "  Já existiam (atualizados):    {$atualizados}\n";
 echo "  Vinculados a PC já cadastrado: {$vinculados}\n";
 
-// PCs que o agente cadastrou e que não correspondem a nenhum patrimônio.
 $fora = [];
 foreach ($pdo->query('SELECT codigo, label FROM computadores ORDER BY codigo') as $r) {
     if (!isset($usados[$r['codigo']])) {

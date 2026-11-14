@@ -25,7 +25,6 @@ $isAdmin = is_admin();
 
   <div class="scan-lines"></div>
 
-  <!-- SIDEBAR -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <div class="brand-icon-sm">
@@ -101,7 +100,6 @@ $isAdmin = is_admin();
     </div>
   </aside>
 
-  <!-- MAIN CONTENT -->
   <div class="main-content">
 
     <div class="topbar">
@@ -115,7 +113,6 @@ $isAdmin = is_admin();
       </div>
     </div>
 
-    <!-- VIEW: LISTA DE COMPUTADORES -->
     <div class="view active" id="viewListComputers">
       <div class="view-header">
         <h2 class="view-title">Computadores</h2>
@@ -135,6 +132,7 @@ $isAdmin = is_admin();
           <option value="">Com e sem agente</option>
           <option value="com">Só com agente (monitorados)</option>
           <option value="sem">Só sem agente</option>
+          <option value="pausado">Só com coleta pausada</option>
         </select>
         <button class="btn-row-action" id="filterClear" type="button">Limpar filtros</button>
         <span class="mono-text list-count" id="listCount"></span>
@@ -146,7 +144,6 @@ $isAdmin = is_admin();
       </div>
     </div>
 
-    <!-- VIEW: DETALHE DO COMPUTADOR -->
     <div class="view" id="viewComputer">
       <div class="view-header">
         <button class="btn-back" id="btnBack">
@@ -158,6 +155,10 @@ $isAdmin = is_admin();
           <p class="view-sub mono-text" id="computerSubtitle">—</p>
         </div>
         <div class="status-badge" id="computerStatus"></div>
+        <button class="btn-row-action btn-pause" id="btnPauseCollect" type="button"
+                title="Parar a coleta de dados deste computador e deixá-lo offline no painel">
+          Pausar coleta
+        </button>
         <?php if ($isAdmin): ?>
         <button class="btn-danger-outline" id="btnDeleteComputer" title="Remover este computador do painel">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h12M8 6V4h4v2M6 6l1 10h6l1-10"/></svg>
@@ -217,7 +218,6 @@ $isAdmin = is_admin();
       </div>
     </div>
 
-    <!-- VIEW: MONITORAMENTO GERAL -->
     <div class="view" id="viewMonitorAll">
       <div class="view-header">
         <h2 class="view-title">Monitoramento Geral</h2>
@@ -246,7 +246,6 @@ $isAdmin = is_admin();
       <div class="monitor-grid" id="monitorGrid"></div>
     </div>
 
-    <!-- VIEW: ALERTAS -->
     <div class="view" id="viewAlerts">
       <div class="view-header">
         <h2 class="view-title">Alertas</h2>
@@ -260,7 +259,6 @@ $isAdmin = is_admin();
       </div>
     </div>
 
-    <!-- VIEW: NOTIFICAÇÕES (histórico de problemas + lidas/não lidas) -->
     <div class="view" id="viewNotifications">
       <div class="view-header">
         <h2 class="view-title">Notificações</h2>
@@ -282,7 +280,6 @@ $isAdmin = is_admin();
       </div>
     </div>
 
-    <!-- VIEW: HISTÓRICO DE PROBLEMAS (semanal / mensal) -->
     <div class="view" id="viewHistory">
       <div class="view-header">
         <h2 class="view-title">Histórico de problemas</h2>
@@ -295,17 +292,16 @@ $isAdmin = is_admin();
       <div id="histContent"><div class="temp-chart-empty">Carregando...</div></div>
     </div>
 
-    <!-- VIEW: PLANTAS DO CAMPUS -->
     <div class="view" id="viewPlantas">
       <div class="view-header">
         <div>
           <h2 class="view-title">Plantas do campus</h2>
-          <p class="view-sub">Cada bolinha é uma sala: <b class="txt-verde">verde</b> = tudo online e sem problemas · <b class="txt-vermelho">vermelha</b> = com problemas ou algum offline · <b class="txt-cinza">cinza</b> = offline / sem agente. O número é o total de computadores da sala.</p>
+          <p class="view-sub">Cada sala aparece na planta com uma cor: <b class="txt-verde">verde</b> = tudo online e sem problemas · <b class="txt-vermelho">vermelha</b> = com problemas ou algum offline · <b class="txt-cinza">cinza</b> = offline / sem agente. O número é o total de computadores da sala.</p>
         </div>
         <div class="planta-header-actions">
           <button class="btn-row-action" id="plantaTema" type="button" title="Alternar fundo da planta">Fundo claro</button>
           <?php if ($isAdmin): ?>
-          <button class="btn-row-action" id="plantaEditToggle" type="button">✎ Editar bolinhas</button>
+          <button class="btn-row-action" id="plantaEditToggle" type="button">✎ Editar salas</button>
           <?php endif; ?>
         </div>
       </div>
@@ -323,8 +319,6 @@ $isAdmin = is_admin();
 
       <div class="planta-livres" id="plantaLivres"></div>
     </div>
-
-    <!-- VIEW: CONFIGURAÇÕES -->
 
     <div class="view" id="viewSettings">
       <div class="view-header">
@@ -404,7 +398,6 @@ $isAdmin = is_admin();
     </div>
 
     <?php if ($isAdmin): ?>
-    <!-- VIEW: USUÁRIOS (somente admins: ver ADMIN_USERNAMES em includes/data.php) -->
     <div class="view" id="viewUsers">
       <div class="view-header">
         <h2 class="view-title">Usuários</h2>
@@ -435,7 +428,6 @@ $isAdmin = is_admin();
     </div>
     <?php endif; ?>
 
-    <!-- VIEW: PLACEHOLDER -->
     <div class="view" id="viewPlaceholder">
       <div class="placeholder-state">
         <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1"><path d="M24 4v8M24 36v8M4 24h8M36 24h8M9.86 9.86l5.66 5.66M32.48 32.48l5.66 5.66M9.86 38.14l5.66-5.66M32.48 15.52l5.66-5.66"/><circle cx="24" cy="24" r="6"/></svg>
@@ -446,7 +438,6 @@ $isAdmin = is_admin();
 
   </div>
 
-  <!-- Pop-up de notificação (toast) -->
   <div class="toast-container" id="toastContainer"></div>
 
   <script src="<?= asset_v('static/js/dashboard.js') ?>"></script>

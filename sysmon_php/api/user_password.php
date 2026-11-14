@@ -1,8 +1,4 @@
 <?php
-// Admin redefine a senha de um usuário que ele mesmo cadastrou. Diferente
-// de api/change_password.php (o próprio usuário trocando a senha dele),
-// aqui não se pede a senha atual da outra pessoa — quem está autenticado
-// como admin tem esse poder.
 require_once '../includes/data.php';
 require_auth();
 require_admin();

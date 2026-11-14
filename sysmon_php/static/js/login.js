@@ -1,4 +1,3 @@
-/* SysMon — login.js */
 
 const usernameInput = document.getElementById("username");
 const passwordInput = document.getElementById("password");
@@ -11,7 +10,6 @@ const liveClock     = document.getElementById("liveClock");
 
 if (liveClock) setInterval(() => liveClock.textContent = new Date().toLocaleTimeString("pt-BR"), 1000);
 
-// Números reais de online/alerta/offline (não mais fixos no HTML)
 async function loadStatusCounts() {
   try {
     const c = await fetch("api/status_public.php").then(r => r.json());
@@ -19,7 +17,6 @@ async function loadStatusCounts() {
     document.getElementById("warnCount").textContent   = c.warning;
     document.getElementById("offCount").textContent    = c.offline;
   } catch (e) {
-    // Se falhar, deixa "—" em vez de mostrar um número errado.
   }
 }
 loadStatusCounts();

@@ -1,17 +1,4 @@
 <?php
-/**
- * Lista de computadores do IFRN Campus Ceará-Mirim (planilha Lista_de_PCs.pdf).
- * Cada linha: [patrimônio, sala/local, modelo, situação na planilha].
- *
- * O código do computador no painel é "CM" + patrimônio (ex.: CM406652),
- * o mesmo que o agente usa ao informar o número de patrimônio.
- *
- * Situação = cor da célula na planilha: OK, CONFIRMAR LOCAL, COLOCAR NO FOG,
- * PROCURAR, PARA DAR BAIXA, NÃO CONFIRMADO (null = cor fora da legenda).
- *
- * Patrimônio repetido na planilha (ignorado na importação):
- *   217680 também aparece em "LAB. DE MICROCONTROLADORES (A204)" (mantido: "LAB. ROBÓTICA (A208)")
- */
 return [
     ['217648', 'LAB. DE MANUTENÇÃO DE PC (202)', 'HP 6005 - Phenom(tm) II X4/8G (2012)', 'OK'],
     ['217655', 'REFEITÓRIO', 'HP 6005 - Phenom(tm) II X4/8G (2012)', 'OK'],

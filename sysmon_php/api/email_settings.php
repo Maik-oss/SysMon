@@ -1,6 +1,4 @@
 <?php
-// E-mail do próprio usuário logado: cadastrar/alterar, ligar/desligar as
-// notificações por e-mail e mandar um e-mail de teste.
 require_once '../includes/data.php';
 require_once '../includes/mailer.php';
 require_auth();

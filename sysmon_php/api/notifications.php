@@ -1,13 +1,9 @@
 <?php
-// Notificações / histórico de problemas. Qualquer usuário logado pode
-// ver (não só admin) — cada um marca como lida pra si mesmo.
 require_once '../includes/data.php';
 require_auth();
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    // Sempre confere o estado atual antes de responder, assim a lista
-    // (e o contador do sininho) fica em dia mesmo sem cron configurado.
-    sync_alert_events();
+            sync_alert_events();
 
     $limit  = isset($_GET['limit']) ? (int)$_GET['limit'] : 100;
     $events = fetch_events($limit);

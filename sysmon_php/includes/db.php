@@ -1,7 +1,4 @@
 <?php
-/**
- * Conexão única (singleton) com o banco de dados via PDO.
- */
 function get_pdo(): PDO
 {
     static $pdo = null;
@@ -22,14 +19,11 @@ function get_pdo(): PDO
                 PDO::ATTR_EMULATE_PREPARES   => false,
             ]);
         } catch (PDOException $e) {
-            // Não expõe detalhes sensíveis da exceção ao cliente.
-            error_log('[sysmon] Falha ao conectar no banco: ' . $e->getMessage());
+                        error_log('[sysmon] Falha ao conectar no banco: ' . $e->getMessage());
             json_response(['error' => 'Falha na conexão com o banco de dados.'], 500);
         }
 
-        // Cria colunas/tabelas novas (e-mail dos usuários, manutenções) se
-        // o banco ainda for da versão anterior. Definida em data.php.
-        if (function_exists('ensure_schema')) {
+                        if (function_exists('ensure_schema')) {
             ensure_schema($pdo, $cfg['dbname']);
         }
     }

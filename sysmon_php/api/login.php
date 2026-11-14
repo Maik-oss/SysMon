@@ -22,8 +22,7 @@ $row = $stmt->fetch();
 if ($row && password_verify($password, $row['senha_hash'])) {
     session_regenerate_id(true);
     $_SESSION['user'] = $row['usuario'];
-    // Garante o e-mail padrão dos admins (só preenche se estiver vazio).
-    try { seed_admin_emails($pdo); } catch (Throwable $e) { error_log('[sysmon] seed_admin_emails: ' . $e->getMessage()); }
+        try { seed_admin_emails($pdo); } catch (Throwable $e) { error_log('[sysmon] seed_admin_emails: ' . $e->getMessage()); }
     json_response(['ok' => true]);
 }
 

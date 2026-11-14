@@ -1,15 +1,4 @@
 <?php
-/**
- * Recebe, por HTTPS, as leituras que o agente coleta em cada computador.
- *
- * Por que existe: o agente antes gravava direto no MySQL (porta 3306), que
- * a rede do campus bloqueia e que obrigava a guardar a senha do banco em
- * cada computador. Agora o agente só envia um POST para cá (porta 443, a
- * mesma do painel) e somente o servidor conversa com o banco.
- *
- * Autenticação: cabeçalho X-SysMon-Key (ou campo "chave" no JSON) igual à
- * chave de includes/agent_config.php. Sem sessão de usuário.
- */
 require_once __DIR__ . '/../includes/data.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -24,24 +13,20 @@ if (strlen($chaveServidor) < 24) {
     json_response(['ok' => false, 'error' => 'Recebimento de dados não configurado no servidor.'], 503);
 }
 
-$raw = file_get_contents('php://input', false, null, 0, 131072);   // até 128 KB
-$in  = json_decode((string) $raw, true);
+$raw = file_get_contents('php://input', false, null, 0, 131072);   $in  = json_decode((string) $raw, true);
 if (!is_array($in)) {
     json_response(['ok' => false, 'error' => 'JSON inválido.'], 400);
 }
 
 $chaveEnviada = (string) ($_SERVER['HTTP_X_SYSMON_KEY'] ?? ($in['chave'] ?? ''));
 if (!hash_equals($chaveServidor, $chaveEnviada)) {
-    usleep(400000);   // atrasa tentativas de adivinhar a chave
-    json_response(['ok' => false, 'error' => 'Chave inválida.'], 401);
+    usleep(400000);       json_response(['ok' => false, 'error' => 'Chave inválida.'], 401);
 }
 
-// ── validação ────────────────────────────────────────────────────────
 function ing_dec($v, int $inteiros, int $casas = 1): ?float {
     if ($v === null || $v === '' || is_bool($v) || !is_numeric($v)) { return null; }
     $f = round((float) $v, $casas);
-    return abs($f) < (10 ** $inteiros) ? $f : null;     // cabe na coluna DECIMAL
-}
+    return abs($f) < (10 ** $inteiros) ? $f : null;     }
 function ing_int($v, int $min, int $max): ?int {
     if ($v === null || $v === '' || is_bool($v) || !is_numeric($v)) { return null; }
     $i = (int) round((float) $v);
@@ -62,11 +47,40 @@ function ing_sec($arr, string $k): array {
 }
 
 $codigo = strtoupper(trim((string) ($in['codigo'] ?? '')));
+while (strncmp($codigo, 'CMCM', 4) === 0 && strlen($codigo) > 6) {
+    $codigo = substr($codigo, 2);
+}
 if (!preg_match('/^[A-Z0-9_.-]{1,20}$/', $codigo)) {
     json_response(['ok' => false, 'error' => 'Código do computador inválido.'], 400);
 }
+if (($in['acao'] ?? '') === 'status') {
+    $st = get_pdo()->prepare(
+        'SELECT c.sala, c.patrimonio, c.coleta_pausada, c.pausada_em, c.pausada_por,
+                TIMESTAMPDIFF(SECOND, (SELECT MAX(criado_em) FROM metricas WHERE codigo = c.codigo), NOW()) AS seg
+         FROM computadores c WHERE c.codigo = ?'
+    );
+    $st->execute([$codigo]);
+    $r = $st->fetch();
+    json_response([
+        'ok' => true,
+        'existe' => (bool) $r,
+        'sala' => $r['sala'] ?? null,
+        'patrimonio' => $r['patrimonio'] ?? null,
+        'segundos_desde_ultimo' => ($r && $r['seg'] !== null) ? (int) $r['seg'] : null,
+        'pausado' => $r ? ((int) $r['coleta_pausada'] === 1) : false,
+        'pausada_em' => $r['pausada_em'] ?? null,
+        'pausada_por' => $r['pausada_por'] ?? null,
+    ]);
+}
+
 $label = ing_txt($in['label'] ?? null, 100) ?? $codigo;
 $local = ing_txt($in['location'] ?? null, 100) ?? '';
+
+$pz = get_pdo()->prepare('SELECT coleta_pausada FROM computadores WHERE codigo = ?');
+$pz->execute([$codigo]);
+if ((int) $pz->fetchColumn() === 1) {
+    json_response(['ok' => true, 'pausado' => true, 'codigo' => $codigo]);
+}
 
 $mobo = ing_sec($in, 'mobo');
 $m    = ing_sec($in, 'metrica');
@@ -77,13 +91,10 @@ $disc = ing_sec($m, 'disco');
 $rede = ing_sec($m, 'rede');
 $tmp  = ing_sec($in, 'temperaturas');
 
-$pdo = get_pdo();   // também cria as colunas/tabelas novas, se faltarem
-try {
+$pdo = get_pdo();   try {
     $pdo->beginTransaction();
 
-    // 1) cadastra o PC (se novo) ou atualiza. Se veio da planilha do campus
-    //    (tem patrimônio), mantém o nome e a sala já cadastrados no painel.
-    $pdo->prepare(
+            $pdo->prepare(
         'INSERT INTO computadores (codigo, label, location, mobo_manufacturer, mobo_model, bios_version)
          VALUES (?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
@@ -99,8 +110,7 @@ try {
         ing_txt($mobo['bios'] ?? null, 100),
     ]);
 
-    // 2) leitura de uso (CPU, GPU, RAM, disco, rede, uptime)
-    $pdo->prepare(
+        $pdo->prepare(
         'INSERT INTO metricas (
             codigo, cpu_usage, cpu_model, cpu_freq, cpu_cores,
             gpu_usage, gpu_temp, gpu_vram_pct, gpu_model,
@@ -119,8 +129,7 @@ try {
         ing_int($m['uptime_h'] ?? null, 0, 2147483647),
     ]);
 
-    // 3) temperaturas (campos vazios ficam NULL: o painel sabe lidar com isso)
-    $pdo->prepare(
+        $pdo->prepare(
         'INSERT INTO temperaturas (
             codigo, cpu_package, cpu_cores, gpu_die, gpu_mem,
             nvme_1, nvme_2, psu, motherboard, ambient, fan_cpu_rpm, fan_sys_rpm

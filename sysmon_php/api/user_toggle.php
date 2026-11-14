@@ -1,8 +1,4 @@
 <?php
-// Admin ativa/desativa o acesso de um usuário que ele cadastrou (sem
-// precisar apagar a conta — útil para afastamento temporário, por ex.).
-// Usuário inativo não consegue mais logar (ver api/login.php, que só
-// aceita "ativo = 1").
 require_once '../includes/data.php';
 require_auth();
 require_admin();

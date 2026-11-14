@@ -1,17 +1,9 @@
 <?php
-// Plantas do campus com as bolinhas de status por sala.
-//   GET  → plantas, marcadores (com cor e contagens ao vivo) e salas sem posição.
-//          Qualquer usuário logado pode consultar.
-//   POST → só administradores editam as bolinhas:
-//          {acao:"salvar", id?, planta, nome, x, y, salas:[...]}  cria/atualiza
-//          {acao:"mover",  id, x, y}                              arrastar a bolinha
-//          {acao:"excluir", id}                                   remove a bolinha
 require_once '../includes/plantas.php';
 require_auth();
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    // Mantém os alertas em dia antes de contar (igual ao Monitoramento Geral).
-    sync_alert_events();
+        sync_alert_events();
     json_response(['ok' => true, 'admin' => is_admin()] + plantas_payload());
 }
 

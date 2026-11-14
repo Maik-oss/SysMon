@@ -1,7 +1,4 @@
 <?php
-// Histórico de manutenção de um computador: quando foi feita e por quem
-// foi registrada. Qualquer usuário logado pode consultar e registrar;
-// só admins podem excluir um registro.
 require_once '../includes/data.php';
 require_auth();
 
@@ -52,15 +49,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             json_response(['ok' => false, 'error' => 'A descrição pode ter no máximo 1000 caracteres.'], 400);
         }
 
-        // Aceita "2026-10-21T14:30" (campo datetime-local) ou "2026-10-21 14:30[:00]".
-        $dt = DateTime::createFromFormat('Y-m-d\TH:i', $quando)
+                $dt = DateTime::createFromFormat('Y-m-d\TH:i', $quando)
            ?: DateTime::createFromFormat('Y-m-d H:i:s', $quando)
            ?: DateTime::createFromFormat('Y-m-d H:i', $quando);
         if (!$dt) {
             json_response(['ok' => false, 'error' => 'Informe a data e a hora da manutenção.'], 400);
         }
-        // Tolera pequenas diferenças de relógio, mas não aceita data no futuro.
-        if ($dt->getTimestamp() > time() + 3600) {
+                if ($dt->getTimestamp() > time() + 3600) {
             json_response(['ok' => false, 'error' => 'A data da manutenção não pode estar no futuro.'], 400);
         }
 

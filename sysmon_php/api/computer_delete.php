@@ -1,7 +1,4 @@
 <?php
-// Remove um computador do painel (e, por causa do ON DELETE CASCADE
-// no banco, todo o histórico de métricas/temperaturas dele junto).
-// Só admins podem fazer isso — ver ADMIN_USERNAMES em includes/data.php.
 require_once '../includes/data.php';
 require_auth();
 require_admin();

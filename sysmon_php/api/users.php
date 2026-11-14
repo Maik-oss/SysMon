@@ -1,6 +1,4 @@
 <?php
-// Cadastro/listagem de usuários do painel. Só os admins (ver
-// ADMIN_USERNAMES em includes/data.php) podem acessar este endpoint.
 require_once '../includes/data.php';
 require_auth();
 require_admin();
@@ -18,9 +16,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($usuario === '' || $senha === '') {
         json_response(['ok' => false, 'error' => 'Preencha usuário e senha.'], 400);
     }
-    // E-mail é obrigatório para todo usuário novo (é por ele que a pessoa
-    // recebe as notificações do sistema).
-    if ($email === null) {
+            if ($email === null) {
         json_response(['ok' => false, 'error' => 'Informe um e-mail válido para o usuário.'], 400);
     }
     if (!preg_match('/^[a-zA-Z0-9._-]{3,50}$/', $usuario)) {

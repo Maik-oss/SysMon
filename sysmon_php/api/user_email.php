@@ -1,6 +1,4 @@
 <?php
-// Admin cadastra/altera o e-mail de um usuário que ele mesmo gerencia
-// (o e-mail dos próprios admins é alterado por eles na tela Configurações).
 require_once '../includes/data.php';
 require_auth();
 require_admin();

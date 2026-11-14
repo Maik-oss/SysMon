@@ -1,25 +1,14 @@
 <?php
-/**
- * Envio de e-mail sem bibliotecas externas: cliente SMTP mínimo
- * (SSL/STARTTLS + AUTH LOGIN) com fallback para o mail() do PHP.
- * Configuração em includes/mail_config.php.
- */
 
-/** Descreve como o envio está configurado (para mostrar no painel). */
 function mail_driver(): string {
     $cfg = require __DIR__ . '/mail_config.php';
     return $cfg['host'] !== '' ? 'smtp' : 'mail';
 }
 
-/**
- * Envia um e-mail (HTML + texto puro).
- * @return array [bool $ok, ?string $erro]
- */
 function send_email(string $to, string $subject, string $html, string $text = ''): array {
     $cfg = require __DIR__ . '/mail_config.php';
 
-    // Anti "header injection": nada de quebra de linha em destinatário/assunto.
-    $to      = trim(str_replace(["\r", "\n"], '', $to));
+        $to      = trim(str_replace(["\r", "\n"], '', $to));
     $subject = trim(str_replace(["\r", "\n"], ' ', $subject));
     if (!filter_var($to, FILTER_VALIDATE_EMAIL)) {
         return [false, 'Destinatário inválido.'];
@@ -47,13 +36,10 @@ function send_email(string $to, string $subject, string $html, string $text = ''
     }
 }
 
-// ── Montagem da mensagem MIME ───────────────────────────────────────
-
 function mime_encode_header(string $s): string {
     return preg_match('/[^\x20-\x7E]/', $s) ? '=?UTF-8?B?' . base64_encode($s) . '?=' : $s;
 }
 
-/** Devolve [headers (string), corpo (string)] da mensagem multipart/alternative. */
 function build_mime_parts(string $fromEmail, string $fromName, string $text, string $html): array {
     $boundary = 'sysmon_' . bin2hex(random_bytes(8));
     $from = ($fromName !== '' ? mime_encode_header($fromName) . ' ' : '') . "<{$fromEmail}>";
@@ -78,14 +64,11 @@ function php_mail_send(string $fromEmail, string $fromName, string $to, string $
     return @mail($to, mime_encode_header($subject), $body, $headers);
 }
 
-// ── Cliente SMTP ────────────────────────────────────────────────────
-
 function smtp_read($fp): array {
     $data = '';
     while (($line = fgets($fp, 1024)) !== false) {
         $data .= $line;
-        // Resposta multilinha: "250-..." continua; "250 ..." encerra.
-        if (strlen($line) < 4 || $line[3] === ' ') {
+                if (strlen($line) < 4 || $line[3] === ' ') {
             break;
         }
     }
@@ -148,8 +131,7 @@ function smtp_send(array $cfg, string $fromEmail, string $fromName, string $to, 
                  . 'Date: ' . date('r') . "\r\n"
                  . 'Message-ID: <' . bin2hex(random_bytes(10)) . '@' . $ehloName . ">\r\n"
                  . "\r\n" . $body;
-        // "Dot-stuffing": linha começando com "." precisa virar "..".
-        $message = preg_replace('/^\./m', '..', $message);
+                $message = preg_replace('/^\./m', '..', $message);
 
         fwrite($fp, $message . "\r\n.\r\n");
         [$code, $data] = smtp_read($fp);

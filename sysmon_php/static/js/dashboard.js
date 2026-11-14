@@ -1,8 +1,6 @@
-/* SysMon — dashboard.js */
 
 const $ = id => document.getElementById(id);
 
-// Escapa texto vindo do banco/usuário antes de colocar em innerHTML.
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
 
 const sidebar          = $("sidebar");
@@ -31,7 +29,7 @@ const views = {
   history:     $("viewHistory"),
   plantas:     $("viewPlantas"),
   settings:    $("viewSettings"),
-  users:       $("viewUsers"),        // só existe no DOM se o logado for um dos admins (ver ADMIN_USERNAMES no PHP)
+  users:       $("viewUsers"),
   placeholder: $("viewPlaceholder"),
 };
 
@@ -43,7 +41,7 @@ const navBtns = {
   history:  $("btnHistory"),
   plantas:  $("btnPlantas"),
   settings: $("btnSettings"),
-  users:    $("btnUsers"),            // idem: pode ser null para não-admin
+  users:    $("btnUsers"),
 };
 
 let currentComputer   = null;
@@ -53,10 +51,8 @@ let refreshTimer      = null;
 let monitorRefreshTimer = null;
 let badgeTimer        = null;
 
-// Intervalo de atualização (configurável em Configurações; padrão 15 segundos)
 let REFRESH_MS = parseInt(localStorage.getItem("sysmon_refresh_ms"), 10) || 15000;
 
-// ── URLs da API PHP ────────────────────────────
 const API = {
   logout:       "api/logout.php",
   search:       q    => `api/computers.php?search=1&q=${encodeURIComponent(q)}`,
@@ -78,36 +74,29 @@ const API = {
   userEmail:      "api/user_email.php",
   history:        periodo => `api/history.php?periodo=${periodo}`,
   fleetSummary:   "api/fleet_summary.php",
+  pauseCollect:   "api/computer_pause.php",
   plantas:        "api/plantas.php",
 };
 
-// Mesmo limite usado no back-end (includes/data.php: ALERT_THRESHOLD) —
-// só para desenhar a linha de limite no gráfico e destacar valores altos.
 const ALERT_THRESHOLD_C = 85;
 
-// Mesmo valor de MANY_PROBLEMS_THRESHOLD no back-end — quantos problemas
-// críticos ativos ao mesmo tempo disparam o banner na aba Alertas.
 const MANY_PROBLEMS_THRESHOLD = 3;
 
-// Clock
 setInterval(() => {
   dashClock.textContent = new Date().toLocaleString("pt-BR", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit", second:"2-digit" });
 }, 1000);
 
-// Sidebar toggle (mobile)
 sidebarToggle.addEventListener("click", () => sidebar.classList.toggle("open"));
 document.addEventListener("click", e => {
   if (!sidebar.contains(e.target) && !sidebarToggle.contains(e.target))
     sidebar.classList.remove("open");
 });
 
-// Logout
 $("btnLogout").addEventListener("click", async () => {
   await fetch(API.logout, { method: "POST" });
   location.href = "login.php";
 });
 
-// View switching
 function showView(view, title) {
   Object.values(views).filter(Boolean).forEach(v => v.classList.remove("active"));
   view.classList.add("active");
@@ -166,12 +155,11 @@ if (navBtns.users) {
   });
 }
 
-// Search
 computerSearch.addEventListener("input", renderComputerList);
 computerSearch.addEventListener("keydown", e => { if (e.key === "Escape") { computerSearch.value = ""; renderComputerList(); } });
 
-// "Sem agente": cadastrado pela planilha, mas o agente ainda não rodou nele.
 function statusInfo(comp) {
+  if (comp.pausada) return { cls: "pausado", label: "Pausado" };
   if (comp.sem_agente) return { cls: "pendente", label: "Sem agente" };
   const nomes = { online: "Online", warning: "Alerta", offline: "Offline" };
   return { cls: comp.status, label: nomes[comp.status] };
@@ -186,7 +174,7 @@ function situacaoTag(comp) {
 function makeComputerCard(comp, i) {
   const st = statusInfo(comp);
   const card = document.createElement("div");
-  card.className = `computer-card ${comp.sem_agente ? "off" : comp.status === "warning" ? "warn" : comp.status === "offline" ? "off" : ""}`;
+  card.className = `computer-card ${comp.pausada || comp.sem_agente ? "off" : comp.status === "warning" ? "warn" : comp.status === "offline" ? "off" : ""}`;
   card.style.animationDelay = `${Math.min(i, 20) * 0.03}s`;
   const salaTxt = comp.sala || comp.location || "Sala não informada";
   card.innerHTML = `
@@ -201,13 +189,10 @@ function makeComputerCard(comp, i) {
       ${comp.patrimonio ? "Patrimônio " + esc(comp.patrimonio) : esc(comp.label)}
       ${situacaoTag(comp)}
     </div>`;
-  // Sempre clicável — mesmo offline, precisa poder abrir pra ver
-  // detalhes e remover o computador do painel se for o caso.
   card.addEventListener("click", () => openComputer(comp));
   return card;
 }
 
-// Lista completa vem do servidor uma vez; busca e filtros rodam no navegador.
 let allComputers = [];
 
 function buildListFilters() {
@@ -235,8 +220,9 @@ function matchesListFilters(comp) {
   const sala = $("filterSala").value, modelo = $("filterModelo").value, ag = $("filterAgente").value;
   if (sala && (sala === "__sem__" ? comp.sala : comp.sala !== sala)) return false;
   if (modelo && (modelo === "__sem__" ? comp.modelo : comp.modelo !== modelo)) return false;
-  if (ag === "com" && comp.sem_agente) return false;
+  if (ag === "com" && (comp.sem_agente || comp.pausada)) return false;
   if (ag === "sem" && !comp.sem_agente) return false;
+  if (ag === "pausado" && !comp.pausada) return false;
   return true;
 }
 
@@ -264,7 +250,6 @@ $("filterClear").addEventListener("click", () => {
   renderComputerList();
 });
 
-// Open computer detail
 async function openComputer(comp) {
   currentComputer = comp;
   currentCat = "overview";
@@ -286,10 +271,15 @@ async function openComputer(comp) {
   showView(views.detail, `${comp.code} — Detalhe`);
   setNavActive(navBtns.list);
 
-  if (comp.status === "offline") {
+  atualizarBotaoPausa(comp);
+
+  if (comp.pausada || comp.status === "offline") {
     metricArea.innerHTML = "";
     tempSubmenu.classList.add("hidden");
-    offlineState.querySelector("div").textContent = comp.sem_agente
+    offlineState.querySelector("div").textContent = comp.pausada
+      ? `Coleta pausada${comp.pausada_por ? " por " + comp.pausada_por : ""}${comp.pausada_em ? " em " + fmtDateTime(comp.pausada_em) : ""}. ` +
+        "O computador fica offline no painel, sem alertas. Clique em Retomar coleta para voltar a monitorar."
+      : comp.sem_agente
       ? "Sem agente — instale o agente neste computador para começar o monitoramento"
       : "Computador Offline";
     offlineState.classList.remove("hidden");
@@ -302,15 +292,13 @@ async function openComputer(comp) {
   refreshTimer = setInterval(refreshDetail, REFRESH_MS);
 }
 
-// A atualização automática não pode redesenhar a aba Manutenção, senão
-// apagaria o que a pessoa está digitando no formulário.
 function refreshDetail() {
   if (currentCat !== "maintenance") renderCategory(currentCat);
 }
 
 btnBack.addEventListener("click", () => {
   clearRefresh();
-  if (voltarParaPlantas) {            // abriu o computador a partir de uma planta
+  if (voltarParaPlantas) {
     voltarParaPlantas = false;
     abrirPlantas();
     return;
@@ -318,6 +306,49 @@ btnBack.addEventListener("click", () => {
   showView(views.list, "Listar Computadores");
   loadComputers();
 });
+
+const btnPauseCollect = $("btnPauseCollect");
+
+function atualizarBotaoPausa(comp) {
+  if (!btnPauseCollect) return;
+  btnPauseCollect.classList.toggle("hidden", !!comp.sem_agente && !comp.pausada);
+  btnPauseCollect.textContent = comp.pausada ? "Retomar coleta" : "Pausar coleta";
+  btnPauseCollect.classList.toggle("retomar", !!comp.pausada);
+  btnPauseCollect.disabled = false;
+}
+
+if (btnPauseCollect) {
+  btnPauseCollect.addEventListener("click", async () => {
+    if (!currentComputer) return;
+    const code = currentComputer.code;
+    const pausar = !currentComputer.pausada;
+    const ok = confirm(pausar
+      ? `Pausar a coleta de "${code}"?\n\nO painel deixa de receber dados desse computador e ele fica OFFLINE, ` +
+        `sem gerar alertas nem e-mails, até alguém clicar em "Retomar coleta".`
+      : `Retomar a coleta de "${code}"?\n\nO agente volta a enviar dados em até 1 minuto.`);
+    if (!ok) return;
+    btnPauseCollect.disabled = true;
+    try {
+      const data = await fetch(API.pauseCollect, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ codigo: code, pausar }),
+      }).then(r => r.json());
+      if (!data.ok) {
+        alert(data.error || "Não foi possível alterar a coleta.");
+        btnPauseCollect.disabled = false;
+        return;
+      }
+      const lista = await fetch(API.search(code)).then(r => r.json());
+      const novo = lista.find(c => c.code === code);
+      loadComputers();
+      if (novo) { await openComputer(novo); } else { atualizarBotaoPausa({ ...currentComputer, pausada: data.pausada }); }
+    } catch (e) {
+      alert("Erro de conexão. Tente novamente.");
+      btnPauseCollect.disabled = false;
+    }
+  });
+}
 
 const btnDeleteComputer = $("btnDeleteComputer");
 if (btnDeleteComputer) {
@@ -353,7 +384,6 @@ if (btnDeleteComputer) {
   });
 }
 
-// Category tabs
 categoryTabs.addEventListener("click", async e => {
   const btn = e.target.closest(".cat-btn");
   if (!btn) return;
@@ -368,9 +398,6 @@ categoryTabs.addEventListener("click", async e => {
     tempSubmenu.classList.add("hidden");
   }
 
-  // Manutenção é um registro feito por pessoas, não depende do coletor —
-  // por isso fica disponível mesmo com o PC offline. As outras abas
-  // continuam mostrando "Computador Offline".
   const offline = currentComputer && currentComputer.status === "offline";
   if (offline && currentCat !== "maintenance") {
     metricArea.innerHTML = "";
@@ -391,11 +418,10 @@ tempSubmenu.addEventListener("click", async e => {
   await renderCategory("temp");
 });
 
-// Fetch helper
 const fetchJSON = url => fetch(url).then(r => r.json());
 
 async function renderCategory(cat) {
-  metricArea.innerHTML = `<div style="color:var(--text3);font-family:var(--mono);font-size:12px;padding:20px 0;">Carregando...</div>`;
+  metricArea.innerHTML = `<div style="color:var(--text);font-family:var(--mono);font-size:12px;padding:20px 0;">Carregando...</div>`;
   const code = currentComputer.code;
 
   if (cat === "maintenance") { await renderMaintenance(code); return; }
@@ -414,12 +440,10 @@ async function renderCategory(cat) {
   renders[cat]?.();
 }
 
-// UI helpers
 const gaugeColor = p => p >= 85 ? "red" : p >= 65 ? "yellow" : "green";
 const tempColor  = t => t >= 85 ? "hot" : t >= 70 ? "warn" : "ok";
 const tempBarClr = t => t >= 85 ? "var(--red)" : t >= 70 ? "var(--yellow)" : "var(--green)";
 
-// Formata um valor numérico para exibição, ou "—" quando o sensor não está disponível (null/undefined)
 function fmt(val, decimals = null) {
   if (val === null || val === undefined || Number.isNaN(val)) return "—";
   return decimals !== null ? Number(val).toFixed(decimals) : val;
@@ -430,15 +454,13 @@ function gauge(label, val, unit, pct, color) {
   color = color || (has ? gaugeColor(pct) : "");
   const barStyle = has ? `width:${pct}%` : `width:100%;background:var(--bg4);box-shadow:none;`;
   return `<div class="m-card"><div class="gauge-wrap">
-    <div class="gauge-label"><span>${label}</span><span class="gauge-val">${fmt(val)}<span style="font-size:11px;color:var(--text3)"> ${has ? unit : ""}</span></span></div>
+    <div class="gauge-label"><span>${label}</span><span class="gauge-val">${fmt(val)}<span style="font-size:11px;color:var(--text)"> ${has ? unit : ""}</span></span></div>
     <div class="gauge-bar"><div class="gauge-fill ${color}" style="${barStyle}"></div></div>
   </div></div>`;
 }
 
 function metricCard(label, val, unit, sub = "", texto = false) {
   const has = val !== null && val !== undefined && !Number.isNaN(val);
-  // texto=true: valor é um texto longo (modelo da placa, versão da BIOS),
-  // não um número — usa fonte menor e quebra a linha em vez de vazar do card.
   return `<div class="m-card ${texto ? "m-card-textual" : ""}">
     <div class="m-card-label">${label}</div>
     <div class="m-card-val ${texto ? "texto" : ""}">${texto ? esc(val) : fmt(val)}<span class="m-card-unit">${has ? unit : ""}</span></div>
@@ -446,7 +468,6 @@ function metricCard(label, val, unit, sub = "", texto = false) {
   </div>`;
 }
 
-// Render functions
 function renderOverview(d) {
   const uptime = d.uptime_h >= 24 ? `${Math.floor(d.uptime_h/24)}d ${d.uptime_h%24}h` : `${d.uptime_h}h`;
   const mobo = currentComputer || {};
@@ -546,8 +567,6 @@ function renderTemps(t, filter) {
   const rows = (filter === "all" ? all : all.filter(r => r.group === filter))
                  .filter(r => r.val !== null && r.val !== undefined);
 
-  // RPM dos fans: exibido só na aba "Todos" (não é um dado de temperatura,
-  // então não faz parte dos filtros CPU/GPU/Armazenamento/Placa-Mãe).
   const fans = filter === "all"
     ? [{ label: "Fan CPU", val: t.fan_cpu_rpm }, { label: "Fan Sistema", val: t.fan_sys_rpm }]
         .filter(f => f.val !== null && f.val !== undefined)
@@ -598,10 +617,9 @@ function renderTemps(t, filter) {
   loadTempChart(currentComputer.code);
 }
 
-// ── Gráfico de temperatura (histórico), SVG puro, sem libs externas ──
 async function loadTempChart(code) {
   const box = $("tempChartBox");
-  if (!box) return; // usuário já trocou de tela antes da resposta chegar
+  if (!box) return;
   try {
     const data = await fetchJSON(API.tempHistory(code));
     if (!data.ok || !data.pontos || !data.pontos.length) {
@@ -633,12 +651,11 @@ function buildTempChartSVG(pontos, threshold) {
     return `<polyline points="${line}" fill="none" stroke="${color}" stroke-width="2" opacity="0.9"/>${dots}`;
   };
 
-  // Eixo Y: 3 linhas-guia (0, metade, topo) só pra dar noção de escala.
   const gridLines = [0, 0.5, 1].map(f => {
     const val = Math.round(maxVal * f);
     const y = yFor(val);
     return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="var(--border)" stroke-width="1"/>
-            <text x="${padL - 6}" y="${y + 3}" text-anchor="end" font-size="9" fill="var(--text3)" font-family="var(--mono)">${val}°</text>`;
+            <text x="${padL - 6}" y="${y + 3}" text-anchor="end" font-size="9" fill="var(--text)" font-family="var(--mono)">${val}°</text>`;
   }).join("");
 
   const thresholdY = yFor(threshold);
@@ -653,7 +670,6 @@ function buildTempChartSVG(pontos, threshold) {
 }
 
 
-// ── Gráfico de pizza: situação geral dos computadores ────────────────
 const FLEET_COLORS = {
   normal:  "var(--green)",
   alerta:  "var(--yellow)",
@@ -675,23 +691,26 @@ async function loadFleetPie() {
 
 function renderFleetPie(d) {
   const box = $("fleetPie");
-  const nota = d.sem_agente
-    ? `<div class="fleet-note mono-text">${d.sem_agente} de ${d.cadastrados} cadastrados ainda sem agente</div>` : "";
+  const partesNota = [];
+  if (d.sem_agente) partesNota.push(`${d.sem_agente} sem agente`);
+  if (d.pausados) partesNota.push(`${d.pausados} com coleta pausada`);
+  const nota = partesNota.length
+    ? `<div class="fleet-note mono-text">${partesNota.join(" · ")} (de ${d.cadastrados} cadastrados)</div>` : "";
   if (!d.total) {
     box.innerHTML = `<div class="temp-chart-empty">${d.cadastrados ? "Nenhum computador enviando dados ainda." : "Nenhum computador cadastrado."}</div>${nota}`;
     return;
   }
 
-  const R = 80, C = 100;                       // raio e centro (viewBox 200x200)
+  const R = 80, C = 100;
   const cats = d.categorias.filter(c => c.total > 0);
-  let ang = -Math.PI / 2;                      // começa no topo
+  let ang = -Math.PI / 2;
   const pt = (a, r = R) => [C + r * Math.cos(a), C + r * Math.sin(a)];
 
   const fatias = cats.map(c => {
     const frac = c.total / d.total;
     const cor = FLEET_COLORS[c.chave];
-    const txt = c.chave === "offline" ? "#d0e0f0" : "#06101a";   // contraste do número na fatia
-    if (frac >= 0.9999) {                      // 100% numa categoria só
+    const txt = c.chave === "offline" ? "#d0e0f0" : "#06101a";
+    if (frac >= 0.9999) {
       return `<circle cx="${C}" cy="${C}" r="${R}" fill="${cor}"><title>${esc(c.rotulo)}: ${c.total}</title></circle>
               <text x="${C}" y="${C + 5}" text-anchor="middle" font-size="16" font-weight="700" fill="${txt}" font-family="var(--mono)">100%</text>`;
     }
@@ -730,19 +749,16 @@ function renderFleetPie(d) {
     <div class="fleet-legend">${legenda}</div>${nota}`;
 }
 
-// Monitor geral
 async function loadMonitorAll() {
-  // Não espera os cartões: o gráfico geral é desenhado de imediato e
-  // independe de haver (ou não) algum coletor ativo.
   loadOverviewTempChart();
   loadFleetPie();
-  monitorGrid.innerHTML = `<div style="color:var(--text3);font-family:var(--mono);font-size:12px;">Carregando...</div>`;
+  monitorGrid.innerHTML = `<div style="color:var(--text);font-family:var(--mono);font-size:12px;">Carregando...</div>`;
   try {
     const todos = await fetchJSON(API.search(""));
-    const list = todos.filter(c => !c.sem_agente);   // sem agente: nada a monitorar ainda
+    const list = todos.filter(c => !c.sem_agente);
     monitorGrid.innerHTML = "";
     if (!list.length) {
-      monitorGrid.innerHTML = `<div style="color:var(--text3);font-family:var(--mono);font-size:12px;">Nenhum computador enviando dados ainda${todos.length ? ` (${todos.length} cadastrados aguardando o agente)` : ""}.</div>`;
+      monitorGrid.innerHTML = `<div style="color:var(--text);font-family:var(--mono);font-size:12px;">Nenhum computador enviando dados ainda${todos.length ? ` (${todos.length} cadastrados aguardando o agente)` : ""}.</div>`;
       return;
     }
     for (const comp of list) monitorGrid.appendChild(await makeMonitorCard(comp));
@@ -755,9 +771,6 @@ async function loadOverviewTempChart() {
   try {
     const data = await fetchJSON(API.tempsOverview);
     if (!data.ok) throw new Error("resposta inválida");
-    // Mesma fonte da aba "Temperatura" de cada PC (tabela temperaturas),
-    // já pronta para todo mundo num único pedido. Vai TODOS os PCs: o
-    // gráfico aparece sempre, mesmo sem nenhum coletor ativo.
     renderOverviewTempChart(data.pcs || []);
   } catch (e) {
     renderOverviewTempChart([], "Não foi possível carregar as temperaturas.");
@@ -794,9 +807,6 @@ async function makeMonitorCard(comp) {
   return card;
 }
 
-// ── Gráfico geral: barras comparando a temperatura atual de cada PC ──
-// Sempre desenha o quadro (eixos + linha do limite). Se não há dado para
-// mostrar, avisa dentro do próprio gráfico em vez de escondê-lo.
 function renderOverviewTempChart(list, errorMsg) {
   const box = $("overviewTempChart");
   if (!box) return;
@@ -828,20 +838,20 @@ function renderOverviewTempChart(list, errorMsg) {
     const bar = (v, x, base) => {
       const alerta = v >= ALERT_THRESHOLD_C;
       return `<g opacity="${op}"><rect x="${x}" y="${yFor(v)}" width="${barW}" height="${baseY - yFor(v)}" fill="${alerta ? "var(--red)" : base}" rx="2"/>
-              <text x="${x + barW / 2}" y="${yFor(v) - 4}" text-anchor="middle" font-size="9" fill="var(--text2)" font-family="var(--mono)">${v}°</text></g>`;
+              <text x="${x + barW / 2}" y="${yFor(v) - 4}" text-anchor="middle" font-size="9" fill="var(--text)" font-family="var(--mono)">${v}°</text></g>`;
     };
     if (has(r.cpu)) out += bar(r.cpu, groupX - barW - 3, "var(--cyan)");
     if (has(r.gpu)) out += bar(r.gpu, groupX + 3, "#ff8a3d");
     if (!has(r.cpu) && !has(r.gpu))
-      out += `<text x="${groupX}" y="${baseY - 8}" text-anchor="middle" font-size="9" fill="var(--text3)" font-family="var(--mono)">sem dados</text>`;
-    out += `<text x="${groupX}" y="${baseY + 16}" text-anchor="middle" font-size="10" fill="var(--text3)" font-family="var(--mono)">${esc(r.code)}</text>`;
+      out += `<text x="${groupX}" y="${baseY - 8}" text-anchor="middle" font-size="9" fill="var(--text)" font-family="var(--mono)">sem dados</text>`;
+    out += `<text x="${groupX}" y="${baseY + 16}" text-anchor="middle" font-size="10" fill="var(--text)" font-family="var(--mono)">${esc(r.code)}</text>`;
     if (off) {
       let quando = "";
       if (r.temp_em) {
         const d = new Date(String(r.temp_em).replace(" ", "T"));
         if (!isNaN(d)) quando = " · " + d.toLocaleDateString("pt-BR", {day:"2-digit", month:"2-digit"}) + " " + d.toLocaleTimeString("pt-BR", {hour:"2-digit", minute:"2-digit"});
       }
-      out += `<text x="${groupX}" y="${baseY + 29}" text-anchor="middle" font-size="9" fill="var(--text3)" font-family="var(--mono)">offline${quando}</text>`;
+      out += `<text x="${groupX}" y="${baseY + 29}" text-anchor="middle" font-size="9" fill="var(--text)" font-family="var(--mono)">offline${quando}</text>`;
     }
     return out;
   }).join("");
@@ -850,18 +860,16 @@ function renderOverviewTempChart(list, errorMsg) {
     const val = Math.round(maxVal * f);
     const y = yFor(val);
     return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="var(--border)" stroke-width="1"/>
-            <text x="${padL - 6}" y="${y + 3}" text-anchor="end" font-size="9" fill="var(--text3)" font-family="var(--mono)">${val}°</text>`;
+            <text x="${padL - 6}" y="${y + 3}" text-anchor="end" font-size="9" fill="var(--text)" font-family="var(--mono)">${val}°</text>`;
   }).join("");
 
   const thresholdY = yFor(ALERT_THRESHOLD_C);
   const thresholdLine = `<line x1="${padL}" y1="${thresholdY}" x2="${W - padR}" y2="${thresholdY}" stroke="var(--red)" stroke-width="1.2" stroke-dasharray="4,4" opacity="0.75"/>`;
 
   const avisoSvg = aviso
-    ? `<text x="${W / 2}" y="${padT + plotH / 2}" text-anchor="middle" font-size="12" fill="var(--text3)" font-family="var(--mono)">${esc(aviso)}</text>`
+    ? `<text x="${W / 2}" y="${padT + plotH / 2}" text-anchor="middle" font-size="12" fill="var(--text)" font-family="var(--mono)">${esc(aviso)}</text>`
     : "";
 
-  // Poucos PCs: o gráfico encolhe junto com a tela. Muitos PCs: largura
-  // fixa com rolagem horizontal, para as barras não ficarem espremidas.
   const sizeStyle = rows.length > 6 ? `width:${W}px;max-width:none;` : `width:${W}px;max-width:100%;`;
   box.innerHTML = `<div style="overflow-x:auto;"><svg viewBox="0 0 ${W} ${H}" style="${sizeStyle}height:auto;display:block;">
     ${gridLines}
@@ -877,7 +885,6 @@ function clearRefresh() {
   if (monitorRefreshTimer) { clearInterval(monitorRefreshTimer); monitorRefreshTimer = null; }
 }
 
-// ── Alertas (computadores em warning/offline) ──────────
 function timeAgo(isoLike) {
   if (!isoLike) return "nunca reportou dados";
   const diffMs = Date.now() - new Date(isoLike.replace(" ", "T")).getTime();
@@ -893,14 +900,13 @@ async function loadAlerts() {
   alertsEmpty().classList.add("hidden");
   try {
     const list = await fetchJSON(API.search(""));
-    const alerts = list.filter(c => c.status !== "online" && !c.sem_agente);
+    const alerts = list.filter(c => c.status !== "online" && !c.sem_agente && !c.pausada);
     if (!alerts.length) { alertsEmpty().classList.remove("hidden"); }
     else { alerts.forEach((comp, i) => alertsGrid().appendChild(makeAlertCard(comp, i))); }
   } catch (e) { console.error(e); }
   loadCritBanner();
 }
 
-// Banner de "muitos problemas vermelhos ao mesmo tempo" (aba Alertas).
 async function loadCritBanner() {
   const banner = $("critBanner");
   if (!banner) return;
@@ -948,23 +954,16 @@ function makeAlertCard(comp, i) {
   return card;
 }
 
-// Contador de alertas no menu lateral (independe da tela aberta)
 async function updateAlertBadge() {
   try {
     const list = await fetchJSON(API.search(""));
-    const n = list.filter(c => c.status !== "online" && !c.sem_agente).length;
+    const n = list.filter(c => c.status !== "online" && !c.sem_agente && !c.pausada).length;
     $("alertBadge").textContent = n;
   } catch (e) {}
 }
 
-// ── Notificações (lista com lida/não lida + filtros + pop-up/toast) ──
-
-// Guarda o maior id de evento já mostrado como pop-up, pra só avisar
-// sobre eventos realmente novos (mesmo depois de recarregar a página).
 let lastSeenNotifId = parseInt(localStorage.getItem("sysmon_last_notif_id"), 10) || 0;
 
-// Último resultado buscado da API, pra filtrar na hora sem precisar
-// pedir de novo pro servidor toda vez que troca o filtro.
 let notifCache = [];
 let notifFilter = "todos";
 
@@ -1041,7 +1040,7 @@ function makeNotifRow(ev) {
 }
 
 async function markNotifRead(id, row) {
-  if (row && row.classList.contains("read")) return; // já lida, nada a fazer
+  if (row && row.classList.contains("read")) return;
   try {
     await fetch(API.notifications, {
       method: "POST",
@@ -1075,7 +1074,6 @@ if (btnMarkAllRead) {
   });
 }
 
-// Contador do sininho "Notificações" — roda sempre, em qualquer tela.
 async function updateNotifBadgeCount() {
   try {
     const data = await fetchJSON(API.notifications);
@@ -1085,19 +1083,13 @@ async function updateNotifBadgeCount() {
   } catch (e) {}
 }
 
-// Compara a lista recebida com o último id visto e mostra um pop-up
-// (toast) pra cada evento novo — cobre tanto máquina entrando em
-// alerta/offline quanto métrica/temperatura passando do limite.
 function checkForNewNotifToasts(events) {
   if (!events || !events.length) return;
   const novos = events.filter(e => e.id > lastSeenNotifId).sort((a, b) => a.id - b.id);
   const maiorId = Math.max(lastSeenNotifId, ...events.map(e => e.id));
 
-  // Na primeira carga da sessão (lastSeenNotifId ainda em 0), não
-  // dispara um monte de pop-up de eventos antigos — só atualiza a
-  // marca d'água e segue a vida.
   if (lastSeenNotifId > 0) {
-    novos.slice(0, 5).forEach(showToast); // limite de 5 de uma vez, pra não lotar a tela
+    novos.slice(0, 5).forEach(showToast);
   }
   lastSeenNotifId = maiorId;
   localStorage.setItem("sysmon_last_notif_id", String(maiorId));
@@ -1121,7 +1113,6 @@ function showToast(ev) {
   }, 7000);
 }
 
-// ── Configurações ───────────────────────────────────────
 function openSettings() {
   $("settingsUsername").textContent = $("sidebarUsername").textContent;
   $("settingsAvatar").textContent   = $("sidebarUsername").textContent.charAt(0).toUpperCase();
@@ -1138,7 +1129,6 @@ function openSettings() {
 $("refreshIntervalSelect").addEventListener("change", e => {
   REFRESH_MS = parseInt(e.target.value, 10);
   localStorage.setItem("sysmon_refresh_ms", String(REFRESH_MS));
-  // Reinicia o timer ativo (se houver) já com o novo intervalo.
   if (refreshTimer) {
     clearInterval(refreshTimer);
     refreshTimer = views.detail.classList.contains("active")
@@ -1216,7 +1206,6 @@ $("btnChangePassword").addEventListener("click", async () => {
   }
 });
 
-// ── Usuários (tela restrita aos admins) ──────────────────
 const usersList  = $("usersList");
 const usersEmpty = $("usersEmpty");
 
@@ -1278,7 +1267,6 @@ function makeUserRow(u) {
   const msg          = row.querySelector(".user-row-msg");
 
   btnEmail.addEventListener("click", async () => {
-    // Primeiro clique: revela o campo (já com o e-mail atual). Segundo: salva.
     if (emailInput.classList.contains("hidden")) {
       emailInput.value = u.email || "";
       emailInput.classList.remove("hidden");
@@ -1310,8 +1298,6 @@ function makeUserRow(u) {
   });
 
   btnReset.addEventListener("click", async () => {
-    // Primeiro clique: revela o campo de senha. Segundo clique (já com
-    // senha digitada): confirma a redefinição.
     if (passInput.classList.contains("hidden")) {
       passInput.classList.remove("hidden");
       passInput.focus();
@@ -1413,9 +1399,7 @@ if ($("btnCreateUser")) {
   });
 }
 
-// ── Manutenção (aba do computador): quando foi feita e por quem ──────
 function nowLocalInput() {
-  // Valor para <input type="datetime-local">, no fuso do navegador.
   const d = new Date();
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 16);
@@ -1435,7 +1419,7 @@ function makeMaintenanceRow(m, isAdmin) {
 }
 
 async function renderMaintenance(code, flashOk = "") {
-  metricArea.innerHTML = `<div style="color:var(--text3);font-family:var(--mono);font-size:12px;padding:20px 0;">Carregando...</div>`;
+  metricArea.innerHTML = `<div style="color:var(--text);font-family:var(--mono);font-size:12px;padding:20px 0;">Carregando...</div>`;
 
   let data;
   try {
@@ -1444,7 +1428,6 @@ async function renderMaintenance(code, flashOk = "") {
     metricArea.innerHTML = `<div class="temp-chart-empty">Não foi possível carregar o histórico de manutenção.</div>`;
     return;
   }
-  // A pessoa pode ter trocado de aba/computador enquanto carregava.
   if (!currentComputer || currentComputer.code !== code || currentCat !== "maintenance") return;
   if (!data.ok) {
     metricArea.innerHTML = `<div class="temp-chart-empty">${esc(data.error || "Erro ao carregar manutenções.")}</div>`;
@@ -1532,7 +1515,6 @@ async function renderMaintenance(code, flashOk = "") {
   });
 }
 
-// ── E-mail do usuário logado (Configurações) ─────────────────────────
 function emailMsg(text, ok) {
   const el = $("emailMsg");
   el.textContent = text;
@@ -1589,7 +1571,6 @@ $("btnTestEmail").addEventListener("click", async () => {
   }
 });
 
-// Lembrete único por sessão se o usuário logado ainda não tem e-mail.
 async function checkMyEmail() {
   try {
     const d = await fetchJSON(API.emailSettings);
@@ -1604,7 +1585,6 @@ async function checkMyEmail() {
 }
 
 
-// ── Histórico de problemas (semanal / mensal) ─────────────────────────
 let histPeriodo = "semana";
 
 navBtns.history.addEventListener("click", () => {
@@ -1732,31 +1712,23 @@ function renderHistory(d) {
     ${d.truncado ? `<div class="mono-text">Há mais de 3000 ocorrências no período; o resumo considera só as 3000 mais recentes.</div>` : ""}`;
 }
 
-// ══════════════════════════════════════════════════════════════════
-// Plantas do campus — bolinhas de status por sala
-// ══════════════════════════════════════════════════════════════════
-// Cada bolinha fica numa posição (x/y em % da imagem) da planta e está
-// ligada a uma ou mais salas do cadastro. Cor e números vêm do servidor
-// (api/plantas.php), calculados ao vivo a partir do status dos PCs.
-// Só administradores veem o botão "Editar bolinhas".
-
-let voltarParaPlantas = false;   // true quando um computador foi aberto a partir de uma planta
+let voltarParaPlantas = false;
 
 const PL = {
-  data: null,          // última resposta da API
+  data: null,
   admin: false,
-  current: null,       // id da planta aberta (ex.: "principal-terreo")
-  selected: null,      // id do marcador selecionado
-  edit: false,         // modo de edição ligado?
-  draft: null,         // marcador sendo criado/editado {id, planta, x, y, nome, salas:Set, nomeTocado}
-  pending: null,       // sala escolhida em "salas sem bolinha", esperando o clique na planta
+  current: null,
+  selected: null,
+  edit: false,
+  draft: null,
+  pending: null,
   salaFiltro: "",
   claro: localStorage.getItem("sysmon_planta_claro") === "1",
   salvando: false,
 };
 
 const COR_ROTULO = { verde: "Tudo online e sem problemas", vermelho: "Com problemas / algum offline", cinza: "Offline ou sem agente" };
-const CAT_ROTULO = { ok: "Sem problemas", problema: "Com problemas", offline: "Offline", sem_agente: "Sem agente" };
+const CAT_ROTULO = { ok: "Sem problemas", problema: "Com problemas", offline: "Offline", sem_agente: "Sem agente", pausado: "Coleta pausada" };
 
 const plView   = () => $("viewPlantas");
 const plPlanta = () => PL.data && PL.data.plantas.find(p => p.id === PL.current);
@@ -1768,13 +1740,11 @@ function abrirPlantas() {
   showView(views.plantas, "Plantas do campus");
   clearRefresh();
   loadPlantas();
-  // Não redesenha enquanto o admin está editando/arrastando (perderia o que digitou).
   refreshTimer = setInterval(() => { if (!PL.draft && !PL.salvando) loadPlantas(true); }, REFRESH_MS);
 }
 
 navBtns.plantas.addEventListener("click", abrirPlantas);
 
-// Ao usar qualquer item do menu, o "voltar" do detalhe deixa de apontar para as plantas.
 document.querySelectorAll(".nav-btn").forEach(b => b.addEventListener("click", () => { if (b !== navBtns.plantas) voltarParaPlantas = false; }));
 
 async function loadPlantas(silencioso = false) {
@@ -1804,7 +1774,6 @@ function renderPlantas() {
   renderPlantaHint();
 }
 
-// ── Resumo geral ────────────────────────────────
 function renderPlantaSummary() {
   const g = PL.data.geral;
   const chip = (cls, v, rot) => `<div class="planta-chip ${cls}"><span class="planta-chip-val">${v}</span><span class="planta-chip-rot">${rot}</span></div>`;
@@ -1814,10 +1783,10 @@ function renderPlantaSummary() {
     chip("vermelho", g.problema, "Com problemas") +
     chip("cinza", g.offline, "Offline") +
     chip("dim", g.sem_agente, "Sem agente") +
-    chip("dim", PL.data.mapeados, "Já ligados a uma bolinha");
+    (g.pausado ? chip("dim", g.pausado, "Coleta pausada") : "") +
+    chip("dim", PL.data.mapeados, "Já ligados a uma sala");
 }
 
-// ── Abas: prédio → andar ────────────────────────
 function corDaPlanta(p) {
   if (!p.marcadores.length) return "";
   if (p.marcadores.some(m => m.cor === "vermelho")) return "vermelho";
@@ -1846,11 +1815,11 @@ function renderPlantaTabs() {
   }));
 }
 
-// ── A planta + bolinhas ─────────────────────────
 function textoTooltip(m) {
   const n = m.n;
   return `${m.nome} — ${n.total} PC(s): ${n.ok} sem problemas, ${n.problema} com problemas, ${n.offline} offline` +
-         (n.sem_agente ? `, ${n.sem_agente} sem agente` : "");
+         (n.sem_agente ? `, ${n.sem_agente} sem agente` : "") +
+         (n.pausado ? `, ${n.pausado} com coleta pausada` : "");
 }
 
 function dotHTML(m, extra = "") {
@@ -1879,7 +1848,7 @@ function renderPlantaStage() {
       <span><i class="planta-lg cinza"></i>${COR_ROTULO.cinza}</span>
       <span class="planta-lg-note">Prédio ${esc(p.predio)} · ${esc(p.andar)}</span>
     </div>
-    ${p.marcadores.length || PL.edit ? "" : `<div class="planta-vazia">Nenhuma sala marcada nesta planta ainda.${PL.admin ? " Use <b>✎ Editar bolinhas</b> para posicionar as salas." : ""}</div>`}`;
+    ${p.marcadores.length || PL.edit ? "" : `<div class="planta-vazia">Nenhuma sala marcada nesta planta ainda.${PL.admin ? " Use <b>✎ Editar salas</b> para posicionar as salas." : ""}</div>`}`;
 
   const canvas = $("plantaCanvas");
   $("plantaTema").textContent = PL.claro ? "Fundo escuro" : "Fundo claro";
@@ -1887,7 +1856,7 @@ function renderPlantaStage() {
   canvas.querySelectorAll(".planta-dot[data-id]").forEach(dot => {
     dot.addEventListener("click", e => {
       e.stopPropagation();
-      if (PL.edit) return;                       // no modo edição, o clique é tratado pelo pointerup (arrastar/abrir)
+      if (PL.edit) return;
       selecionarMarcador(+dot.dataset.id);
     });
     dot.addEventListener("pointerdown", e => { if (PL.edit) iniciarArraste(e, dot); });
@@ -1906,7 +1875,6 @@ function selecionarMarcador(id) {
   renderPlantaSide();
 }
 
-// ── Arrastar uma bolinha (modo edição) ──────────
 function iniciarArraste(e, dot) {
   e.preventDefault();
   const canvas = $("plantaCanvas");
@@ -1914,7 +1882,7 @@ function iniciarArraste(e, dot) {
   const id = +dot.dataset.id;
   const x0 = e.clientX, y0 = e.clientY;
   let moveu = false, nx = null, ny = null;
-  try { dot.setPointerCapture(e.pointerId); } catch (_) { /* ok */ }
+  try { dot.setPointerCapture(e.pointerId); } catch (_) {  }
 
   const mover = ev => {
     if (!moveu && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
@@ -1928,7 +1896,7 @@ function iniciarArraste(e, dot) {
     dot.removeEventListener("pointermove", mover);
     dot.removeEventListener("pointerup", soltar);
     dot.removeEventListener("pointercancel", soltar);
-    if (!moveu) { abrirRascunhoDe(id); return; }          // foi só um clique: abre a edição
+    if (!moveu) { abrirRascunhoDe(id); return; }
     PL.salvando = true;
     try {
       const d = await postPlantas({ acao: "mover", id, x: +nx.toFixed(3), y: +ny.toFixed(3) });
@@ -1936,7 +1904,7 @@ function iniciarArraste(e, dot) {
       const f = plAcha(id); if (f) { f.marcador.x = nx; f.marcador.y = ny; }
       if (PL.draft && PL.draft.id === id) { PL.draft.x = +nx.toFixed(3); PL.draft.y = +ny.toFixed(3); }
     } catch (err) {
-      alert(err.message || "Não foi possível mover a bolinha.");
+      alert(err.message || "Não foi possível mover a sala.");
       await loadPlantas(true);
     } finally { PL.salvando = false; }
   };
@@ -1950,7 +1918,6 @@ async function postPlantas(body) {
   return r.json();
 }
 
-// ── Painel lateral ──────────────────────────────
 function boxNum(cls, v, rot) {
   return `<div class="planta-num ${cls}"><div class="planta-num-v">${v}</div><div class="planta-num-r">${rot}</div></div>`;
 }
@@ -1980,9 +1947,10 @@ function renderPlantaSide() {
         ${boxNum("vermelho", n.problema, "Com problemas")}
         ${boxNum("cinza", n.offline, "Offline")}
         ${n.sem_agente ? boxNum("dim", n.sem_agente, "Sem agente") : ""}
+        ${n.pausado ? boxNum("dim", n.pausado, "Pausados") : ""}
       </div>
       <div class="planta-pcs">${m.pcs.map(pc => `<button type="button" class="planta-pc cat-${pc.cat}" data-code="${esc(pc.code)}" title="${esc(CAT_ROTULO[pc.cat])} — ${esc(pc.sala)}">${esc(pc.code)}</button>`).join("")}</div>
-      ${PL.admin ? `<button type="button" class="btn-row-action" id="plantaEditarSel">Editar esta bolinha</button>` : ""}
+      ${PL.admin ? `<button type="button" class="btn-row-action" id="plantaEditarSel">Editar esta sala</button>` : ""}
     </div>`;
   }
 
@@ -1996,7 +1964,7 @@ function renderPlantaSide() {
         <span class="planta-dot-mini cor-${m.cor}"></span>
         <span class="planta-row-main">
           <span class="planta-row-nome">${esc(m.nome)}</span>
-          <span class="planta-row-sub">${n.total} PC${n.total === 1 ? "" : "s"} · ${n.ok} ok · ${n.problema} c/ problema · ${n.offline} offline${n.sem_agente ? ` · ${n.sem_agente} s/ agente` : ""}</span>
+          <span class="planta-row-sub">${n.total} PC${n.total === 1 ? "" : "s"} · ${n.ok} ok · ${n.problema} c/ problema · ${n.offline} offline${n.sem_agente ? ` · ${n.sem_agente} s/ agente` : ""}${n.pausado ? ` · ${n.pausado} pausado(s)` : ""}</span>
         </span>
       </button>`;
     }).join("") + `</div>`;
@@ -2019,17 +1987,16 @@ async function abrirComputadorDaPlanta(code) {
   } catch (e) { console.error(e); alert("Não foi possível abrir o computador."); }
 }
 
-// ── Salas ainda sem bolinha ─────────────────────
 function renderPlantaLivres() {
   const box = $("plantaLivres");
   const l = PL.data.salas_livres;
   if (!l.length && !PL.data.sem_sala) { box.innerHTML = ""; return; }
   const chips = l.map(s => `<button type="button" class="planta-livre ${PL.pending === s.sala ? "sel" : ""}" data-sala="${esc(s.sala)}" ${PL.edit ? "" : "disabled"}>${esc(s.sala)} <b>${s.total}</b></button>`).join("");
   box.innerHTML = `
-    <div class="section-title">Salas ainda sem bolinha (${l.length})</div>
-    <div class="planta-livres-chips">${chips || '<span class="mono-text">Todas as salas já têm bolinha.</span>'}</div>
-    ${PL.edit && l.length ? `<div class="settings-hint">Clique numa sala e depois no ponto da planta onde ela fica.</div>` : (l.length && PL.admin ? `<div class="settings-hint">Ative <b>✎ Editar bolinhas</b> para posicionar estas salas nas plantas.</div>` : "")}
-    ${PL.data.sem_sala ? `<div class="settings-hint">${PL.data.sem_sala} computador(es) estão sem sala cadastrada e não aparecem em nenhuma bolinha.</div>` : ""}`;
+    <div class="section-title">Salas ainda não marcadas na planta (${l.length})</div>
+    <div class="planta-livres-chips">${chips || '<span class="mono-text">Todas as salas já estão marcadas na planta.</span>'}</div>
+    ${PL.edit && l.length ? `<div class="settings-hint">Clique numa sala e depois no ponto da planta onde ela fica.</div>` : (l.length && PL.admin ? `<div class="settings-hint">Ative <b>✎ Editar salas</b> para posicionar estas salas nas plantas.</div>` : "")}
+    ${PL.data.sem_sala ? `<div class="settings-hint">${PL.data.sem_sala} computador(es) estão sem sala cadastrada e não aparecem na planta.</div>` : ""}`;
   box.querySelectorAll(".planta-livre").forEach(b => b.addEventListener("click", () => {
     if (!PL.edit) return;
     PL.pending = PL.pending === b.dataset.sala ? null : b.dataset.sala;
@@ -2037,10 +2004,9 @@ function renderPlantaLivres() {
   }));
 }
 
-// ── Modo edição (só admin) ──────────────────────
 function atualizarBotaoEdicao() {
   const b = $("plantaEditToggle");
-  if (b) b.textContent = PL.edit ? "✓ Concluir edição" : "✎ Editar bolinhas";
+  if (b) b.textContent = PL.edit ? "✓ Concluir edição" : "✎ Editar salas";
   if (b) b.classList.toggle("ativo", PL.edit);
 }
 
@@ -2050,7 +2016,7 @@ function renderPlantaHint() {
   h.classList.remove("hidden");
   h.innerHTML = PL.pending
     ? `Agora clique na planta onde fica <b>${esc(PL.pending)}</b>.`
-    : `<b>Modo edição:</b> clique num ponto vazio da planta para criar uma bolinha · arraste uma bolinha para mover · clique nela para editar as salas ou excluir.`;
+    : `<b>Modo edição:</b> clique num ponto vazio da planta para criar uma sala · arraste uma sala para mover · clique nela para editar ou excluir.`;
 }
 
 const editToggle = $("plantaEditToggle");
@@ -2088,7 +2054,6 @@ function abrirRascunhoDe(id) {
   renderPlantas();
 }
 
-// Todas as salas conhecidas, com quantos PCs e em qual bolinha já estão.
 function todasAsSalas() {
   const mapa = new Map();
   PL.data.salas_livres.forEach(s => mapa.set(s.sala, { sala: s.sala, total: s.total, em: null }));
@@ -2103,18 +2068,18 @@ function todasAsSalas() {
 function editorHTML() {
   const d = PL.draft;
   return `<div class="m-card planta-editor">
-    <div class="form-card-title">${d.id ? "Editar bolinha" : "Nova bolinha"} · ${esc(plPlanta().andar)} (${esc(plPlanta().predio)})</div>
+    <div class="form-card-title">${d.id ? "Editar sala" : "Nova sala"} · ${esc(plPlanta().andar)} (${esc(plPlanta().predio)})</div>
     <label class="settings-label" for="pdNome">Nome mostrado na planta</label>
     <input class="settings-input" id="pdNome" maxlength="100" value="${esc(d.nome)}" placeholder="Ex.: Lab. de Informática 1" autocomplete="off"/>
-    <label class="settings-label" for="pdFiltro" style="margin-top:14px;">Salas ligadas a esta bolinha</label>
+    <label class="settings-label" for="pdFiltro" style="margin-top:14px;">Nomes de sala da planilha ligados a esta sala</label>
     <input class="settings-input" id="pdFiltro" value="${esc(PL.salaFiltro)}" placeholder="Filtrar salas..." autocomplete="off"/>
     <div class="planta-sala-list" id="pdSalas"></div>
-    <div class="settings-hint">Marque mais de uma sala quando a planilha usa nomes diferentes para o mesmo lugar (ex.: LAB. GAMES e LAB. JOGOS). Uma sala só pode estar em uma bolinha.</div>
+    <div class="settings-hint">Marque mais de uma sala quando a planilha usa nomes diferentes para o mesmo lugar (ex.: LAB. GAMES e LAB. JOGOS). Cada nome só pode estar em uma sala da planta.</div>
     <div class="settings-msg" id="pdMsg"></div>
     <div class="planta-editor-btns">
       <button type="button" class="btn-settings-save" id="pdSalvar">Salvar</button>
       <button type="button" class="btn-row-action" id="pdCancelar">Cancelar</button>
-      ${d.id ? `<button type="button" class="btn-row-action danger" id="pdExcluir">Excluir bolinha</button>` : ""}
+      ${d.id ? `<button type="button" class="btn-row-action danger" id="pdExcluir">Excluir sala</button>` : ""}
     </div>
   </div>`;
 }
@@ -2124,7 +2089,6 @@ function desenharListaSalas() {
   const f = PL.salaFiltro.trim().toLowerCase();
   const box = $("pdSalas");
   const lista = todasAsSalas().filter(s => !f || s.sala.toLowerCase().includes(f));
-  // marcadas primeiro, depois as livres, por fim as que já pertencem a outra bolinha
   const peso = s => d.salas.has(s.sala) ? 0 : (!s.em ? 1 : 2);
   lista.sort((a, b) => peso(a) - peso(b) || a.sala.localeCompare(b.sala, "pt-BR", { numeric: true }));
   box.innerHTML = lista.map(s => {
@@ -2133,7 +2097,7 @@ function desenharListaSalas() {
       <input type="checkbox" value="${esc(s.sala)}" ${d.salas.has(s.sala) ? "checked" : ""}/>
       <span class="planta-sala-nome">${esc(s.sala)}</span>
       <span class="planta-sala-n">${s.total} PC${s.total === 1 ? "" : "s"}</span>
-      ${outra ? `<span class="planta-sala-em" title="Ao marcar, a sala sai da outra bolinha">hoje em «${esc(s.em.nome)}» (${esc(s.em.planta.andar)}, ${esc(s.em.planta.predio)})</span>` : ""}
+      ${outra ? `<span class="planta-sala-em" title="Ao marcar, o nome sai da outra sala">hoje em «${esc(s.em.nome)}» (${esc(s.em.planta.andar)}, ${esc(s.em.planta.predio)})</span>` : ""}
     </label>`;
   }).join("") || `<div class="planta-side-vazio">Nenhuma sala encontrada.</div>`;
 
@@ -2168,7 +2132,7 @@ function ligarEditor() {
 
   const ex = $("pdExcluir");
   if (ex) ex.addEventListener("click", async () => {
-    if (!confirm(`Excluir a bolinha "${d.nome}"? As salas voltam para a lista de salas sem bolinha.`)) return;
+    if (!confirm(`Excluir a sala "${d.nome}" da planta? Os nomes voltam para a lista de salas ainda não marcadas na planta.`)) return;
     ex.disabled = true; PL.salvando = true;
     try {
       const r = await postPlantas({ acao: "excluir", id: d.id });
@@ -2180,7 +2144,6 @@ function ligarEditor() {
   });
 }
 
-// Init
 loadComputers();
 updateAlertBadge();
 updateNotifBadgeCount();

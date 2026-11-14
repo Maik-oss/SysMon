@@ -28,12 +28,10 @@ if (!$row || !password_verify($senhaAtual, $row['senha_hash'])) {
     json_response(['ok' => false, 'error' => 'Senha atual incorreta.'], 401);
 }
 
-// Já é o mesmo nome de usuário: nada para fazer.
 if (strcasecmp($novoUsuario, $usuarioAtual) === 0) {
     json_response(['ok' => true, 'usuario' => $usuarioAtual]);
 }
 
-// Garante que o novo nome de usuário ainda não está em uso.
 $check = $pdo->prepare('SELECT id FROM usuarios WHERE usuario = ?');
 $check->execute([$novoUsuario]);
 if ($check->fetch()) {

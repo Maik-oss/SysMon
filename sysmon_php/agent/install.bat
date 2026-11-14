@@ -1,17 +1,4 @@
 @echo off
-REM ============================================================
-REM Instalador do agente SysMon.
-REM
-REM O que este script faz:
-REM   1) Instala as dependencias Python (wmi, pywin32)
-REM   2) Cria uma Tarefa Agendada no Windows para iniciar o agente
-REM      sozinho, toda vez que o computador ligar - sem precisar
-REM      abrir nada manualmente depois disso.
-REM
-REM Recomendado: clique com o botao direito neste arquivo e escolha
-REM "Executar como administrador" (necessario para o passo 2 rodar
-REM mesmo sem ninguem logado no Windows).
-REM ============================================================
 
 setlocal
 cd /d "%~dp0"
@@ -52,11 +39,22 @@ schtasks /create /tn "SysMonAgent" /tr "\"%PYW%\" \"%~dp0collector.py\"" /sc ons
 
 if errorlevel 1 (
     echo.
-    echo Nao foi possivel criar a tarefa automaticamente. Isso costuma
-    echo acontecer se este script nao foi executado como Administrador.
-    echo Voce ainda pode rodar o agente manualmente com:
-    echo     python collector.py
+    echo Nao foi possivel criar a tarefa agendada: isso acontece quando este
+    echo script NAO foi executado como Administrador ^(botao direito em
+    echo install.bat ^> Executar como administrador^).
+    echo.
+    echo Plano B: criando o inicio automatico na pasta Inicializar do usuario.
+    > "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\SysMonAgent.cmd" echo @start "" /min "%PYW%" "%~dp0collector.py"
+    if exist "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\SysMonAgent.cmd" (
+        echo Pronto: o agente vai iniciar quando este usuario entrar no Windows.
+        echo Iniciando o agente agora...
+        start "" /min "%PYW%" "%~dp0collector.py"
+    ) else (
+        echo Nao consegui criar o inicio automatico. Rode manualmente:
+        echo     python collector.py
+    )
 ) else (
+    del "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\SysMonAgent.cmd" >nul 2>&1
     echo.
     echo Pronto! O agente vai iniciar sozinho a cada vez que o Windows
     echo ligar. Para testar agora, sem reiniciar o PC, rode:
@@ -75,6 +73,7 @@ if errorlevel 1 (
 ) else (
     echo.
     echo Comunicacao com o painel OK.
+    echo Para conferir depois se o agente esta funcionando, rode verificar.bat
 )
 
 echo.

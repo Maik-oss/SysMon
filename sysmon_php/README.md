@@ -22,6 +22,18 @@ site por **HTTPS** (`api/agent_ingest.php`); só o PHP grava no MySQL.
 
 ---
 
+## 🚀 Como executar o agente num PC do campus ou notebook
+
+> **Abra o CMD** → `cd agent` → `pip install -r requirements.txt` → `python collector.py`
+> link do site: https://projeto2tecnolog2.websiteseguro.com/
+>
+> Os mesmos 4 passos valem para o PC do campus e para o notebook (Windows com Python 3.9+).
+> Deixe a janela aberta. Detalhes, instalação automática (`install.bat`) e solução de
+> problemas: veja [`agent/README.md`](agent/README.md).
+
+
+---
+
 ## 📁 Estrutura
 
 ```
@@ -236,7 +248,7 @@ problema e lista das ocorrências. As notificações agora ficam guardadas por
 ## 🗺️ Plantas do campus (menu **Plantas do campus**)
 
 As plantas dos dois prédios (**Principal** e **Anexo**, térreo, 1º e 2º andar)
-ficam em `static/plantas/` e aparecem com uma **bolinha por sala**:
+ficam em `static/plantas/` e aparecem com cada **sala marcada na planta**:
 
 | Cor | Significa |
 |-----|-----------|
@@ -244,26 +256,26 @@ ficam em `static/plantas/` e aparecem com uma **bolinha por sala**:
 | 🔴 vermelha | algum computador com problema (alerta/crítico) **ou** algum offline |
 | ⚪ cinza | nenhum computador online (tudo offline ou ainda sem agente) |
 
-O número dentro da bolinha é o total de computadores da sala. Clicando nela
+O número dentro da sala é o total de computadores da sala. Clicando nela
 (ou na lista ao lado) aparecem: total, **sem problemas**, **com problemas**,
 **offline**, **sem agente** e o código de cada PC — clicar no código abre o
 detalhe do computador (o botão *Voltar* retorna à planta). Tudo é calculado ao
 vivo com a mesma regra do Monitoramento Geral e atualiza no intervalo definido
 em Configurações.
 
-### Posicionando as bolinhas (administradores)
-As plantas são só desenho (sem nome de sala), então cada bolinha precisa ser
-ligada uma vez à sala do cadastro:
+### Posicionando as salas (administradores)
+As plantas são só desenho (sem nome de sala), então cada sala precisa ser
+marcada uma vez e ligada ao nome da sala do cadastro:
 
-1. Abra a planta e clique em **✎ Editar bolinhas**.
+1. Abra a planta e clique em **✎ Editar salas**.
 2. Clique no ponto da planta onde fica a sala → marque a(s) sala(s) da lista
    (use o filtro) → **Salvar**. Marque mais de uma sala quando a planilha usa
    nomes diferentes para o mesmo lugar (ex.: `LAB. GAMES` e `LAB. JOGOS`).
-3. Arraste uma bolinha para mudar a posição; clique nela para editar ou excluir.
-4. Em **Salas ainda sem bolinha** (rodapé) aparece o que falta posicionar;
+3. Arraste uma sala para mudar a posição; clique nela para editar ou excluir.
+4. Em **Salas ainda não marcadas na planta** (rodapé) aparece o que falta posicionar;
    clique no nome da sala e depois no ponto da planta.
 
-Uma sala só pode estar em uma bolinha. Usuários comuns só visualizam.
+Cada nome de sala da planilha só pode estar em uma sala da planta. Usuários comuns só visualizam.
 
 ### Detalhes
 - Tabelas `planta_marcadores` e `planta_marcador_salas`: criadas sozinhas na
@@ -282,4 +294,17 @@ Uma sala só pode estar em uma bolinha. Usuários comuns só visualizam.
   `config.ini` nos computadores.
 - Se o servidor estiver sem chave, o endpoint responde 503 (não aceita dados).
 - Os computadores **não têm mais a senha do banco**.
+- `agent/verificar.bat` mostra se o agente já foi executado no PC (tarefa,
+  processo, último envio, certificado e o que o painel recebeu) e cria o
+  certificado HTTPS que faltar (`cadeia.pem`).
+
+## Pausar a coleta de um computador
+
+Botão **Pausar coleta / Retomar coleta** no detalhe de cada computador
+(`api/computer_pause.php`). Pausado = o painel deixa de gravar as leituras, o PC
+fica **offline de propósito** (selo "Pausado"), sem alertas nem e-mails, e fora
+da pizza do Monitoramento Geral e dos contadores de Alertas. O agente para de
+coletar e consulta o painel a cada 1 minuto até ser retomado. A pausa vale
+mesmo com agentes antigos (o servidor ignora as leituras). Quem pausou e
+quando fica gravado (`computadores.pausada_por` / `pausada_em`).
 
